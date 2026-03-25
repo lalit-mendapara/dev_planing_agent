@@ -16,7 +16,15 @@ def create_initial_state() -> dict:
         "gaps_confirmed":[], # gaps dev said yes to 
         "gaps_deferred":[], # gaps dev said no/ later
         "constraints":[], # deadlines,team size, budget, etc.
-        "convesation_complete":False,
+        "conversation_complete":False,
+
+        # --- Token tracking -------------------------
+        "token_usage":{
+            "total_input":0,
+            "total_output":0,
+            "total":0,
+            "calls":[], # per-call breakdown
+        },
 
         # --- Set by plan_generator.py -------------------------
         "proposal":None, # full generated plan dict
