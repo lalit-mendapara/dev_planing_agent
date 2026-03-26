@@ -1,3 +1,15 @@
 Metadata-Version: 2.4
 Name: planagent
-Version: 0.0.0
+Version: 0.1.0
+Summary: A CLI tool for generating project plans using LLMs
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: langgraph
+Requires-Dist: langchain
+Requires-Dist: langchain-community
+Requires-Dist: litellm
+Requires-Dist: typer
+Requires-Dist: rich
+Requires-Dist: pathspec
+Requires-Dist: python-dotenv
+Requires-Dist: pytest

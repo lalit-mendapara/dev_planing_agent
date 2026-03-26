@@ -10,6 +10,8 @@ planagent/state.py
 planagent.egg-info/PKG-INFO
 planagent.egg-info/SOURCES.txt
 planagent.egg-info/dependency_links.txt
+planagent.egg-info/entry_points.txt
+planagent.egg-info/requires.txt
 planagent.egg-info/top_level.txt
 tests/test_context_reader.py
 tests/test_conversation.py
