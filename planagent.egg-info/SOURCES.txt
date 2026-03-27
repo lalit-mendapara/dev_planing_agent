@@ -1,3 +1,4 @@
+README.md
 pyproject.toml
 planagent/__init__.py
 planagent/cli.py

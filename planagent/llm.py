@@ -1,12 +1,14 @@
 import os
 import sys
+import hashlib
+import json
 import litellm
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- THE ONLY LINE YOU CHANGE TO SWITCH MODELS --- 
-MODEL = "ollama/llama3.1" # phase 1: local dev, change as per requirements
+# --- THE ONLY LINE YOU CHANGE TO SWITCH MODELS ---
+MODEL = "ollama/gpt-oss:120b-cloud"  # phase 1: local dev, change as per requirements
 
 # For ollama, point liteLLM at local server
 if MODEL.startswith("ollama"):
@@ -49,6 +51,21 @@ class TokenTracker:
 # Module-level tracker — shared across all calls
 tracker = TokenTracker()
 
+# ---------------------------------------------------------------------------
+# Response cache — avoid duplicate LLM calls for identical prompts
+# ---------------------------------------------------------------------------
+_response_cache: dict[str, str] = {}
+
+
+def _cache_key(messages: list) -> str:
+    """Deterministic hash of a message list for caching."""
+    raw = json.dumps(messages, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Token counting
+# ---------------------------------------------------------------------------
 
 def _count_tokens(messages: list) -> int:
     """Count tokens in a message list using litellm."""
@@ -71,18 +88,41 @@ def _count_text_tokens(text: str) -> int:
         return len(text) // 4
 
 
-def chat(messages: list, stream: bool = True, label: str = "chat") -> str:
+# ---------------------------------------------------------------------------
+# Main chat function
+# ---------------------------------------------------------------------------
+
+def chat(messages: list, stream: bool = True, label: str = "chat",
+         json_mode: bool = False, use_cache: bool = False) -> str:
     """
-    messages formate:[{"role":"system"|"user"|"assistant","content":"..."}]
+    messages format: [{"role":"system"|"user"|"assistant","content":"..."}]
     Returns the response text. Token usage is recorded in `tracker`.
+
+    json_mode: if True, requests structured JSON output from the model.
+    use_cache: if True, returns cached response for identical prompts.
     """
+    # Check cache for non-streaming calls
+    if use_cache and not stream:
+        key = _cache_key(messages)
+        if key in _response_cache:
+            cached = _response_cache[key]
+            # Record as zero-cost cached call
+            tracker.record(f"{label}_cached", 0, 0)
+            return cached
+
     input_tokens = _count_tokens(messages)
 
-    response = litellm.completion(
-        model=MODEL,
-        messages=messages,
-        stream=stream
-    )
+    # Build extra kwargs
+    kwargs = {
+        "model": MODEL,
+        "messages": messages,
+        "stream": stream,
+    }
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+
+    response = litellm.completion(**kwargs)
+
     if stream:
         full = ""
         for chunk in response:
@@ -97,14 +137,18 @@ def chat(messages: list, stream: bool = True, label: str = "chat") -> str:
         content = response.choices[0].message.content
         output_tokens = _count_text_tokens(content)
         tracker.record(label, input_tokens, output_tokens)
+        # Store in cache
+        if use_cache:
+            _response_cache[_cache_key(messages)] = content
         return content
 
-def build_messages(system:str,history:list,user:str) -> list:
+
+def build_messages(system: str, history: list, user: str) -> list:
     """
     builds the messages array for any LLM call.
     """
     return [
-        {"role":"system","content":system},
+        {"role": "system", "content": system},
         *history,
-        {"role":"user","content":user}
+        {"role": "user", "content": user},
     ]
