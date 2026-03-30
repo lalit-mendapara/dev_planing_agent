@@ -1,17 +1,68 @@
 import json
-import sys
 from pathlib import Path
-from rich.console import Console
 from planagent.llm import chat, build_messages, tracker
+from planagent.ui import (
+    console,
+    parse_agent_response,
+    render_agent_message,
+    render_token_panel,
+    render_session_summary,
+    stream_to_panel,
+    get_user_choice,
+    get_user_input,
+)
 
-console = Console()
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "system_prompt.txt"
 DONE_SIGNAL = "CONVERSATION_COMPLETE"
+
+
+def prefill_state_from_scan(state: dict) -> dict:
+    """Auto-populate state fields from the cached project scan.
+    This prevents the LLM from asking about things the scan already reveals."""
+    ex = state.get("existing_summary")
+    if not ex or state.get("scenario") != "existing":
+        return state
+
+    # Tech stack — confirmed from scan, never re-ask
+    lang = ex.get("language", "unknown")
+    fw = ex.get("framework", "unknown")
+    if lang != "unknown" or fw != "unknown":
+        state["tech_stack"] = {
+            "language": lang,
+            "framework": fw,
+            "database": "unknown",  # scan can't detect DB, still ask
+        }
+
+    # User types — infer from class names like User, Admin, etc.
+    classes = ex.get("classes", [])
+    inferred_users = []
+    for cls in classes:
+        name = cls.split("::")[-1].lower()
+        if name in ("user", "admin", "customer", "moderator", "coach",
+                     "nutritionist", "seller", "buyer", "driver", "vendor"):
+            inferred_users.append(cls.split("::")[-1])
+    if inferred_users:
+        state["user_types"] = inferred_users
+
+    # Gaps — from scan flags
+    ft = ex.get("file_types", {})
+    gaps = []
+    if not ex.get("has_tests"):
+        gaps.append("no tests detected")
+    if not ft.get("migration"):
+        gaps.append("no migration files")
+    if not ft.get("config"):
+        gaps.append("no config files (.env)")
+    if gaps:
+        state["gaps_flagged"] = gaps
+
+    return state
 
 # ---------------------------------------------------------------------------
 # Sliding window config
 # ---------------------------------------------------------------------------
-WINDOW_SIZE = 6  # keep last N turn-pairs in full; older turns get summarized
+WINDOW_SIZE = 6   # keep last N turn-pairs in full; older turns get summarized
+MAX_TURNS = 8     # hard cap — force CONVERSATION_COMPLETE after this many turns
 
 
 # ---------------------------------------------------------------------------
@@ -250,59 +301,6 @@ def _apply_sliding_window(state: dict) -> tuple[str, list]:
 
 
 # ---------------------------------------------------------------------------
-# Live token usage panel — printed after every turn
-# ---------------------------------------------------------------------------
-
-def _print_live_token_panel(turn_count: int) -> None:
-    """Print a compact live token breakdown after each conversation turn."""
-    calls = tracker.calls
-    last = calls[-1] if calls else {}
-
-    # Categorize all calls so far
-    cats = {}
-    for c in calls:
-        label = c.get("label", "")
-        if "conversation_turn" in label:
-            cat = "chat"
-        elif "state_extraction" in label:
-            cat = "extract"
-        elif "conversation_summary" in label:
-            cat = "summary"
-        elif "_cached" in label:
-            cat = "cached"
-        else:
-            cat = "other"
-        if cat not in cats:
-            cats[cat] = {"in": 0, "out": 0}
-        cats[cat]["in"] += c.get("input_tokens", 0)
-        cats[cat]["out"] += c.get("output_tokens", 0)
-
-    # Build compact display
-    console.print(f"\n  [dim]┌─ Turn {turn_count} ─────────────────────────────────┐[/dim]")
-    console.print(
-        f"  [dim]│[/dim] This turn: "
-        f"[cyan]{last.get('input_tokens', 0)}[/cyan] in / "
-        f"[green]{last.get('output_tokens', 0)}[/green] out"
-    )
-
-    # Category breakdown
-    parts = []
-    for cat in ["chat", "extract", "summary", "cached"]:
-        if cat in cats:
-            total = cats[cat]["in"] + cats[cat]["out"]
-            parts.append(f"{cat}=[yellow]{total}[/yellow]")
-    if parts:
-        console.print(f"  [dim]│[/dim] Breakdown: {' │ '.join(parts)}")
-
-    console.print(
-        f"  [dim]│[/dim] [bold]Total: [yellow]{tracker.total}[/yellow] tokens[/bold] "
-        f"([cyan]{tracker.total_input}[/cyan] in + [green]{tracker.total_output}[/green] out) "
-        f"across {len(calls)} calls"
-    )
-    console.print(f"  [dim]└──────────────────────────────────────────┘[/dim]\n")
-
-
-# ---------------------------------------------------------------------------
 # Opening message
 # ---------------------------------------------------------------------------
 
@@ -340,37 +338,41 @@ def _opening_message(state: dict) -> str:
 
 def run_conversation(state: dict) -> dict:
     """Main phase 1 loop. Runs until conversation_complete.
-    Uses sliding window + incremental extraction for token efficiency."""
+    Uses sliding window + incremental extraction for token efficiency.
+    Renders Claude Code-style panels and multiple-choice options."""
 
-    # Opening message
+    # Opening message — rendered as a panel
     opening = _opening_message(state)
-    sys.stdout.write(f"\nAgent: {opening}\n\n")
-    sys.stdout.flush()
+    render_agent_message(opening)
     state["conversation_history"].append(
         {"role": "assistant", "content": opening}
     )
 
     turn_count = 0
+    # pending_choice holds user input from an arrow-key selection so we
+    # skip the free-text prompt and go straight to the next LLM turn.
+    pending_choice: str | None = None
+
     while not state["conversation_complete"]:
-        # Get developer input
-        try:
-            user_input = console.input("[bold purple]You:[/bold purple] ").strip()
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Session ended.[/dim]")
-            break
+        # --- Get user input -----------------------------------------------
+        if pending_choice is not None:
+            user_input = pending_choice
+            pending_choice = None
+        else:
+            user_input = get_user_input()
 
         if not user_input:
-            continue
+            console.print("[dim]Session ended.[/dim]")
+            break
 
         state["conversation_history"].append(
             {"role": "user", "content": user_input}
         )
         turn_count += 1
 
-        # Incremental state extraction every 2 turns (only new turns)
-        if turn_count % 2 == 0:
-            console.print("[dim]Updating project context...[/dim]")
-            state = _extract_state_incremental(state)
+        # Incremental state extraction every turn (keeps "Still needed" current)
+        console.print("[dim]Updating project context...[/dim]")
+        state = _extract_state_incremental(state)
 
         # Build system prompt with dynamic trimming
         system = _build_system_prompt(state)
@@ -388,16 +390,22 @@ def run_conversation(state: dict) -> dict:
 
         messages = build_messages(system, windowed_history, user_input)
 
-        sys.stdout.write("\nAgent: ")
-        sys.stdout.flush()
-        response = chat(messages, stream=True,
-                        label=f"conversation_turn_{turn_count}")
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        # --- Stream response into a Live panel (no raw stdout) -----------
+        response = stream_to_panel(chat, messages,
+                                   label=f"conversation_turn_{turn_count}")
 
-        # Live token usage — side-by-side with conversation
-        _print_live_token_panel(turn_count)
+        # Parse out ```options blocks → clean text + option list
+        message_text, options = parse_agent_response(response)
 
+        # The streaming panel was transient (disappears when done).
+        # Now render the final clean panel with options block stripped.
+        render_agent_message(message_text)
+
+        # Live token usage panel
+        render_token_panel(tracker, turn_count)
+
+        # Store the FULL response (including options block) in history
+        # so the LLM has context, but the user sees the clean version
         state["conversation_history"].append(
             {"role": "assistant", "content": response}
         )
@@ -405,53 +413,35 @@ def run_conversation(state: dict) -> dict:
         # Check completion signal
         if DONE_SIGNAL in response:
             state["conversation_complete"] = True
-            # Final extraction to capture everything from last turns
             state = _extract_state_incremental(state)
-            console.print("\n[dim]Got everything I need. Generating plan...[/dim]\n")
+            console.print(
+                "[dim]Got everything I need. Generating plan...[/dim]\n"
+            )
+            break
+
+        # Hard turn limit — force completion if LLM keeps going
+        if turn_count >= MAX_TURNS:
+            state["conversation_complete"] = True
+            state = _extract_state_incremental(state)
+            console.print(
+                "[dim]Reached turn limit. Generating plan with what we have...[/dim]\n"
+            )
+            break
+
+        # --- If options were presented, arrow-key select ----------------
+        if options:
+            choice = get_user_choice(options)
+            if not choice:
+                console.print("[dim]Session ended.[/dim]")
+                break
+            # Feed the choice directly into the next iteration
+            # (no extra get_user_input prompt)
+            pending_choice = choice
 
     # Save token usage to state
     state["token_usage"] = tracker.summary()
 
-    # Final summary panel
-    calls = tracker.calls
-    cats = {}
-    for c in calls:
-        label = c.get("label", "")
-        if "conversation_turn" in label:
-            cat = "chat"
-        elif "state_extraction" in label:
-            cat = "extract"
-        elif "conversation_summary" in label:
-            cat = "summary"
-        elif "plan_generation" in label:
-            cat = "plan"
-        elif "_cached" in label:
-            cat = "cached"
-        else:
-            cat = "other"
-        if cat not in cats:
-            cats[cat] = {"in": 0, "out": 0, "count": 0}
-        cats[cat]["in"] += c.get("input_tokens", 0)
-        cats[cat]["out"] += c.get("output_tokens", 0)
-        cats[cat]["count"] += 1
-
-    console.print("\n[bold cyan]═══ Session Token Usage ═══[/bold cyan]")
-    for cat in ["chat", "extract", "summary", "plan", "cached", "other"]:
-        if cat in cats:
-            d = cats[cat]
-            total = d["in"] + d["out"]
-            console.print(
-                f"  [bold]{cat.ljust(8)}[/bold] "
-                f"{d['count']} calls │ "
-                f"[cyan]{d['in']}[/cyan] in + [green]{d['out']}[/green] out = "
-                f"[yellow]{total}[/yellow]"
-            )
-    console.print(
-        f"  [bold]{'TOTAL'.ljust(8)}[/bold] "
-        f"{len(calls)} calls │ "
-        f"[cyan]{tracker.total_input}[/cyan] in + [green]{tracker.total_output}[/green] out = "
-        f"[bold yellow]{tracker.total}[/bold yellow]"
-    )
-    console.print("[bold cyan]═══════════════════════════[/bold cyan]\n")
+    # Final session summary panel
+    render_session_summary(tracker)
 
     return state

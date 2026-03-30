@@ -93,13 +93,16 @@ def _count_text_tokens(text: str) -> int:
 # ---------------------------------------------------------------------------
 
 def chat(messages: list, stream: bool = True, label: str = "chat",
-         json_mode: bool = False, use_cache: bool = False) -> str:
+         json_mode: bool = False, use_cache: bool = False,
+         stream_callback=None) -> str:
     """
     messages format: [{"role":"system"|"user"|"assistant","content":"..."}]
     Returns the response text. Token usage is recorded in `tracker`.
 
     json_mode: if True, requests structured JSON output from the model.
     use_cache: if True, returns cached response for identical prompts.
+    stream_callback: optional callable(token: str) invoked for each streamed
+        token.  When None the tokens are written to sys.stdout (legacy).
     """
     # Check cache for non-streaming calls
     if use_cache and not stream:
@@ -127,8 +130,11 @@ def chat(messages: list, stream: bool = True, label: str = "chat",
         full = ""
         for chunk in response:
             token = chunk.choices[0].delta.content or ""
-            sys.stdout.write(token)
-            sys.stdout.flush()
+            if stream_callback is not None:
+                stream_callback(token)
+            else:
+                sys.stdout.write(token)
+                sys.stdout.flush()
             full += token
         output_tokens = _count_text_tokens(full)
         tracker.record(label, input_tokens, output_tokens)
