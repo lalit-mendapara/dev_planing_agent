@@ -1,0 +1,58 @@
+define user ask off topic
+  "tell me a joke"
+  "what is the weather today"
+  "who is the president"
+  "write me a poem"
+  "help me with my homework"
+  "what is the meaning of life"
+  "tell me a story"
+  "how do I cook pasta"
+  "what's the latest news"
+  "play a game with me"
+  "translate this to french"
+  "write python code for me"
+  "implement this feature"
+  "debug this code"
+  "fix this bug for me"
+  "generate code for login"
+  "what is 2+2"
+  "recommend a movie"
+  "how tall is mount everest"
+
+define user ask about planning
+  "I want to build an API"
+  "plan my backend"
+  "what database should I use"
+  "help me architect this system"
+  "I need to design a microservice"
+  "what tech stack do you recommend"
+  "I want to add authentication"
+  "plan the modules for my app"
+  "what features should I include"
+  "help me define the roadmap"
+  "I want to build a SaaS platform"
+  "what framework should I choose"
+  "design the folder structure"
+  "plan the API endpoints"
+  "what design patterns should I use"
+  "I need help planning my project"
+  "let's discuss the architecture"
+  "what should my v1 include"
+
+define bot refuse off topic
+  "I'm your backend architecture planning assistant. I can only help with planning your project — things like architecture, tech stack, features, modules, and roadmap. Let's get back to planning! What would you like to build or change?"
+
+define bot respond to planning
+  "Sure, let me help you plan that."
+
+define flow check topic allowed
+  user ask off topic
+  bot refuse off topic
+  stop
+
+define flow check output on topic
+  bot ...
+  $is_off_topic = execute check_output_topic
+  if $is_off_topic
+    bot refuse off topic
+    stop

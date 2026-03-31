@@ -11,6 +11,7 @@ from planagent.ui import (
     get_user_choice,
     get_user_input,
 )
+from planagent.guardrails.guard import check_input, check_output
 
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "system_prompt.txt"
 DONE_SIGNAL = "CONVERSATION_COMPLETE"
@@ -18,41 +19,112 @@ DONE_SIGNAL = "CONVERSATION_COMPLETE"
 
 def prefill_state_from_scan(state: dict) -> dict:
     """Auto-populate state fields from the cached project scan.
-    This prevents the LLM from asking about things the scan already reveals."""
+    This prevents the LLM from asking about things the scan already reveals.
+    Now leverages deep context: models, enums, infra, env, dependencies, tests."""
     ex = state.get("existing_summary")
     if not ex or state.get("scenario") != "existing":
         return state
 
-    # Tech stack — confirmed from scan, never re-ask
+    # Tech stack — use comprehensive detection from context_reader
     lang = ex.get("language", "unknown")
     fw = ex.get("framework", "unknown")
+    full_ts = ex.get("tech_stack", {})  # from _detect_full_tech_stack
+
+    # Build the state tech_stack from the comprehensive detection
+    tech = {
+        "language": lang,
+        "framework": fw,
+    }
+    # Pull specific categories from the full tech stack
+    if full_ts.get("database"):
+        tech["database"] = ", ".join(full_ts["database"])
+    elif full_ts.get("database_cache"):
+        tech["database"] = ", ".join(full_ts["database_cache"])
+    else:
+        tech["database"] = "unknown"
+    if full_ts.get("orm"):
+        tech["orm"] = ", ".join(full_ts["orm"])
+    if full_ts.get("auth"):
+        tech["auth"] = ", ".join(full_ts["auth"])
+    if full_ts.get("queue"):
+        tech["message_queue"] = ", ".join(full_ts["queue"])
+    if full_ts.get("api_style"):
+        tech["api_style"] = ", ".join(full_ts["api_style"])
+    if full_ts.get("testing"):
+        tech["testing"] = ", ".join(full_ts["testing"])
+    if full_ts.get("monitoring"):
+        tech["monitoring"] = ", ".join(full_ts["monitoring"])
+    if full_ts.get("cloud"):
+        tech["cloud"] = ", ".join(full_ts["cloud"])
+    if full_ts.get("container"):
+        tech["container"] = ", ".join(full_ts["container"])
+    if full_ts.get("ci_cd"):
+        tech["ci_cd"] = ", ".join(full_ts["ci_cd"])
+    if full_ts.get("payment"):
+        tech["payment"] = ", ".join(full_ts["payment"])
+    if full_ts.get("realtime"):
+        tech["realtime"] = ", ".join(full_ts["realtime"])
+    if full_ts.get("ai"):
+        tech["ai_ml"] = ", ".join(full_ts["ai"])
+    if full_ts.get("validation"):
+        tech["validation"] = ", ".join(full_ts["validation"])
+    if full_ts.get("package_manager"):
+        tech["package_manager"] = ", ".join(full_ts["package_manager"])
+    if full_ts.get("linter"):
+        tech["linter"] = ", ".join(full_ts["linter"])
+    if full_ts.get("build"):
+        tech["build_tools"] = ", ".join(full_ts["build"])
+
     if lang != "unknown" or fw != "unknown":
-        state["tech_stack"] = {
-            "language": lang,
-            "framework": fw,
-            "database": "unknown",  # scan can't detect DB, still ask
-        }
+        state["tech_stack"] = tech
 
     # User types — infer from class names like User, Admin, etc.
+    _USER_NAMES = {"user", "admin", "customer", "moderator", "coach",
+                   "nutritionist", "seller", "buyer", "driver", "vendor",
+                   "merchant", "manager", "staff", "member", "subscriber",
+                   "author", "editor", "reviewer", "patient", "doctor"}
     classes = ex.get("classes", [])
     inferred_users = []
     for cls in classes:
-        name = cls.split("::")[-1].lower()
-        if name in ("user", "admin", "customer", "moderator", "coach",
-                     "nutritionist", "seller", "buyer", "driver", "vendor"):
-            inferred_users.append(cls.split("::")[-1])
+        # Handle both "file::ClassName" and "file::ClassName (docstring)"
+        raw_name = cls.split("::")[-1].split("(")[0].strip().lower()
+        if raw_name in _USER_NAMES:
+            inferred_users.append(cls.split("::")[-1].split("(")[0].strip())
     if inferred_users:
         state["user_types"] = inferred_users
 
-    # Gaps — from scan flags
+    # Gaps — from scan flags (now much richer)
     ft = ex.get("file_types", {})
     gaps = []
     if not ex.get("has_tests"):
         gaps.append("no tests detected")
     if not ft.get("migration"):
         gaps.append("no migration files")
-    if not ft.get("config"):
+    env_keys = ex.get("env_keys", [])
+    if not ft.get("config") and not env_keys:
         gaps.append("no config files (.env)")
+    infra = ex.get("infra", {})
+    if not infra.get("dockerfiles"):
+        gaps.append("no Dockerfile")
+    if not infra.get("github_actions"):
+        gaps.append("no CI/CD pipeline")
+    # Check test coverage gaps
+    test_map = ex.get("test_map", {})
+    if test_map:
+        tested_modules = {v.get("tests_module") for v in test_map.values()
+                          if v.get("tests_module")}
+        # Find code files without corresponding tests
+        code_files = [rel for rel, info in
+                      state.get("context_index", {}).get("files", {}).items()
+                      if info.get("type") == "code"]
+        untested = []
+        for cf in code_files:
+            stem = Path(cf).stem
+            if stem not in tested_modules and not stem.startswith("__"):
+                untested.append(stem)
+        if untested:
+            gaps.append(f"untested modules: {', '.join(untested[:5])}")
+
     if gaps:
         state["gaps_flagged"] = gaps
 
@@ -62,7 +134,6 @@ def prefill_state_from_scan(state: dict) -> dict:
 # Sliding window config
 # ---------------------------------------------------------------------------
 WINDOW_SIZE = 6   # keep last N turn-pairs in full; older turns get summarized
-MAX_TURNS = 8     # hard cap — force CONVERSATION_COMPLETE after this many turns
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +162,7 @@ def _build_context(state: dict) -> str:
                 f"  Folders: {', '.join(ex.get('top_folders', []))}",
             ]
 
-    # Scan-based signals for gap detection
+    # Scan-based signals for gap detection (enriched)
     ex = state.get("existing_summary", {})
     if ex:
         signals = []
@@ -100,8 +171,24 @@ def _build_context(state: dict) -> str:
         ft = ex.get("file_types", {})
         if not ft.get("migration"):
             signals.append("NO migration files detected")
-        if not ft.get("config"):
+        env_keys = ex.get("env_keys", [])
+        if not ft.get("config") and not env_keys:
             signals.append("NO config files (.env) detected")
+        infra = ex.get("infra", {})
+        if not infra.get("dockerfiles"):
+            signals.append("NO Dockerfile detected")
+        if not infra.get("github_actions"):
+            signals.append("NO CI/CD pipeline detected")
+        # Untested modules
+        test_map = ex.get("test_map", {})
+        if test_map:
+            tested = {v.get("tests_module") for v in test_map.values() if v.get("tests_module")}
+            idx_files = state.get("context_index", {}).get("files", {})
+            untested = [Path(r).stem for r, i in idx_files.items()
+                        if i.get("type") == "code" and Path(r).stem not in tested
+                        and not Path(r).stem.startswith("__")]
+            if untested:
+                signals.append(f"Untested modules: {', '.join(untested[:5])}")
         if signals:
             lines.append(f"\n--- Scan Flags ---\n" + "\n".join(f"⚠ {s}" for s in signals))
 
@@ -129,9 +216,8 @@ def _build_context(state: dict) -> str:
     if state.get("gaps_deferred"):
         lines.append(f"Gaps deferred: {', '.join(state['gaps_deferred'])}")
 
-    # Show collection progress so the LLM knows what's left
+    # Show collection progress (informational, not prescriptive)
     collected = []
-    missing = []
     for field, label in [
         ("project_goal", "project goal"),
         ("user_types", "user types"),
@@ -141,10 +227,7 @@ def _build_context(state: dict) -> str:
     ]:
         if state.get(field):
             collected.append(label)
-        else:
-            missing.append(label)
     lines.append(f"\nAlready collected: {', '.join(collected) if collected else 'nothing yet'}")
-    lines.append(f"Still needed: {', '.join(missing) if missing else 'all collected — ready to finalize'}")
     return "\n".join(lines)
 
 
@@ -158,26 +241,22 @@ def _build_system_prompt(state: dict) -> str:
     context = _build_context(state)
     prompt = raw.replace("{context}", context)
 
-    # Trim question priority items that are already collected
-    # This saves ~20-40 tokens per already-answered section
+    # Trim topic items that are already collected to save tokens
     if state.get("project_goal"):
         prompt = prompt.replace(
-            "1. what are they building (project type, one-line description)\n", "")
-    if state.get("user_types"):
-        prompt = prompt.replace(
-            "2. who are the users (user types, roles, permissions needed)\n", "")
+            "- Project goal — what are they building / adding / changing\n", "")
     if state.get("features_v1"):
         prompt = prompt.replace(
-            "3. what are the core features (module by module, v1 scope)\n", "")
+            "- V1 features — the core modules for first launch\n", "")
     if state.get("tech_stack"):
         prompt = prompt.replace(
-            "4. what is the tech stack (language, framework, database, auth)\n", "")
+            "- Database choice — if not already detected by scan\n", "")
     if state.get("constraints"):
         prompt = prompt.replace(
-            "5. any constraints (deadline, team size, existing infrastructure)\n", "")
+            "- Constraints — deadline, team size (ask ONCE, accept whatever they say)\n", "")
     if state.get("features_v2"):
         prompt = prompt.replace(
-            "6. what goes in v2 (features mentioned but not critical for launch)\n", "")
+            "- V2 features — anything mentioned but not critical for launch\n", "")
 
     return prompt
 
@@ -305,7 +384,8 @@ def _apply_sliding_window(state: dict) -> tuple[str, list]:
 # ---------------------------------------------------------------------------
 
 def _opening_message(state: dict) -> str:
-    """Returns first message based on detected scenario."""
+    """Returns first message based on detected scenario.
+    Now shows richer context: models, entry points, test coverage, infra."""
     if state["scenario"] == "empty":
         return "what are you building? Even one line is fine to start."
     s = state["existing_summary"]
@@ -313,17 +393,61 @@ def _opening_message(state: dict) -> str:
     fw = s.get("framework", "unknown framework")
     flds = ", ".join(s.get("top_folders", [])[:4])
 
-    # If we have rich context, mention key classes/routes
+    # Build rich context lines from deep scan
     extras = []
+
+    # Project identity from manifest/README
+    manifest = s.get("manifest", {})
+    if manifest.get("description"):
+        extras.append(f"Project: {manifest.get('name', '')} — {manifest['description']}")
+    elif s.get("readme_summary"):
+        extras.append(f"About: {s['readme_summary'][:150]}")
+
     classes = s.get("classes", [])
     if classes:
-        extras.append(f"Key classes: {', '.join(c.split('::')[-1] for c in classes[:5])}")
+        # Show class names without file prefix for readability
+        cls_names = [c.split("::")[-1].split("(")[0].strip() for c in classes[:6]]
+        extras.append(f"Key classes: {', '.join(cls_names)}")
+
+    models = s.get("models", [])
+    if models:
+        model_strs = []
+        for m in models[:5]:
+            fields = m.get("fields", [])
+            if fields:
+                model_strs.append(f"{m['name']}({', '.join(fields[:4])})")
+            else:
+                model_strs.append(m["name"])
+        extras.append(f"DB Models: {', '.join(model_strs)}")
+
     routes = s.get("routes", [])
     if routes:
-        extras.append(f"Routes found: {len(routes)}")
+        extras.append(f"Routes/endpoints: {len(routes)} found")
+
+    entry_points = s.get("entry_points", [])
+    if entry_points:
+        eps = [e["file"] for e in entry_points[:3]]
+        extras.append(f"Entry points: {', '.join(eps)}")
+
+    test_map = s.get("test_map", {})
+    if test_map:
+        test_count = sum(len(v.get("tests", [])) for v in test_map.values())
+        extras.append(f"Tests: {test_count} tests in {len(test_map)} files")
+
+    infra = s.get("infra", {})
+    if infra:
+        infra_bits = []
+        if infra.get("dockerfiles"):
+            infra_bits.append("Docker")
+        if infra.get("compose_services"):
+            infra_bits.append(f"Compose({', '.join(infra['compose_services'][:3])})")
+        if infra.get("github_actions"):
+            infra_bits.append("GitHub Actions")
+        if infra_bits:
+            extras.append(f"Infra: {', '.join(infra_bits)}")
 
     msg = (
-        f"I can see you have an existing {lang} project using {fw}.\n"
+        f"I've deeply scanned your {lang} project using {fw}.\n"
         f"Top-level folders: {flds}."
     )
     if extras:
@@ -355,9 +479,11 @@ def run_conversation(state: dict) -> dict:
 
     while not state["conversation_complete"]:
         # --- Get user input -----------------------------------------------
+        from_choice = False
         if pending_choice is not None:
             user_input = pending_choice
             pending_choice = None
+            from_choice = True
         else:
             user_input = get_user_input()
 
@@ -365,12 +491,26 @@ def run_conversation(state: dict) -> dict:
             console.print("[dim]Session ended.[/dim]")
             break
 
+        # --- Guardrails: check user input is on-topic ----------------
+        # Skip guardrails for selections from agent-suggested options —
+        # the agent itself proposed them, so they are inherently on-topic.
+        is_allowed, refusal = (True, "") if from_choice else check_input(user_input)
+        if not is_allowed:
+            render_agent_message(refusal)
+            state["conversation_history"].append(
+                {"role": "user", "content": user_input}
+            )
+            state["conversation_history"].append(
+                {"role": "assistant", "content": refusal}
+            )
+            continue
+
         state["conversation_history"].append(
             {"role": "user", "content": user_input}
         )
         turn_count += 1
 
-        # Incremental state extraction every turn (keeps "Still needed" current)
+        # Incremental state extraction every turn
         console.print("[dim]Updating project context...[/dim]")
         state = _extract_state_incremental(state)
 
@@ -394,6 +534,11 @@ def run_conversation(state: dict) -> dict:
         response = stream_to_panel(chat, messages,
                                    label=f"conversation_turn_{turn_count}")
 
+        # --- Guardrails: check agent output is on-topic ---------------
+        is_on_topic, cleaned = check_output(response)
+        if not is_on_topic:
+            response = cleaned
+
         # Parse out ```options blocks → clean text + option list
         message_text, options = parse_agent_response(response)
 
@@ -416,15 +561,6 @@ def run_conversation(state: dict) -> dict:
             state = _extract_state_incremental(state)
             console.print(
                 "[dim]Got everything I need. Generating plan...[/dim]\n"
-            )
-            break
-
-        # Hard turn limit — force completion if LLM keeps going
-        if turn_count >= MAX_TURNS:
-            state["conversation_complete"] = True
-            state = _extract_state_incremental(state)
-            console.print(
-                "[dim]Reached turn limit. Generating plan with what we have...[/dim]\n"
             )
             break
 

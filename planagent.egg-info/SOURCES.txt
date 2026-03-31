@@ -15,6 +15,8 @@ planagent.egg-info/dependency_links.txt
 planagent.egg-info/entry_points.txt
 planagent.egg-info/requires.txt
 planagent.egg-info/top_level.txt
+planagent/guardrails/__init__.py
+planagent/guardrails/guard.py
 tests/test_context_reader.py
 tests/test_conversation.py
 tests/test_output.py
