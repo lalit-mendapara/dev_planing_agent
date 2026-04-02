@@ -5,6 +5,7 @@ Renders Markdown panels, multiple-choice prompts, token bars, and banners.
 
 import re
 import json
+from datetime import datetime
 import questionary
 from questionary import Style as QStyle
 from rich.console import Console
@@ -40,7 +41,7 @@ console = Console(theme=THEME)
 # ---------------------------------------------------------------------------
 
 OPTIONS_PATTERN = re.compile(
-    r"```options\s*\n(.*?)\n\s*```", re.DOTALL
+    r"```options\s*(.*?)\s*```", re.DOTALL
 )
 
 BANNER = r"""
@@ -361,6 +362,120 @@ def render_session_summary(tracker) -> None:
 # ---------------------------------------------------------------------------
 # Proposal display (upgraded)
 # ---------------------------------------------------------------------------
+
+def render_version_history(versions: list[dict]) -> None:
+    """Render plan version history as a styled table."""
+    if not versions:
+        console.print(Panel("[dim]No version history found.[/dim]",
+                            border_style="dim", padding=(0, 2)))
+        return
+
+    lines = []
+    for v in versions:
+        ver = v.get("version", "?")
+        ts = v.get("timestamp", "")
+        # Compact timestamp
+        if ts:
+            try:
+                dt = datetime.fromisoformat(ts)
+                ts = dt.strftime("%Y-%m-%d %H:%M")
+            except (ValueError, TypeError):
+                pass
+        msg = v.get("message", "")
+        files = v.get("files", [])
+        lines.append(
+            f"  **v{ver}**  {ts}  │  {msg}  │  {len(files)} files"
+        )
+
+    console.print(Panel(
+        "\n".join(lines),
+        title="[bold cyan]Plan Version History[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    ))
+    console.print()
+
+
+def render_diff(diff_text: str, title: str = "Diff") -> None:
+    """Render a unified diff with color coding."""
+    if not diff_text or "No changes" in diff_text:
+        console.print(Panel(f"[dim]{diff_text}[/dim]",
+                            border_style="dim", padding=(0, 2)))
+        return
+
+    styled_lines = []
+    for line in diff_text.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            styled_lines.append(f"[bold]{line}[/bold]")
+        elif line.startswith("@@"):
+            styled_lines.append(f"[cyan]{line}[/cyan]")
+        elif line.startswith("+"):
+            styled_lines.append(f"[green]{line}[/green]")
+        elif line.startswith("-"):
+            styled_lines.append(f"[red]{line}[/red]")
+        else:
+            styled_lines.append(line)
+
+    console.print(Panel(
+        "\n".join(styled_lines),
+        title=f"[bold purple]{title}[/bold purple]",
+        border_style="purple",
+        padding=(1, 2),
+    ))
+    console.print()
+
+
+def render_edit_result(section: str, success: bool, token_count: int = 0) -> None:
+    """Render result of a targeted plan edit."""
+    if success:
+        msg = f"[green]✅ Updated [bold]{section}[/bold] successfully[/green]"
+        if token_count:
+            msg += f"  [dim]({token_count} tokens)[/dim]"
+    else:
+        msg = f"[red]❌ Failed to update [bold]{section}[/bold][/red]"
+    console.print(Panel(msg, border_style="dim", padding=(0, 2)))
+    console.print()
+
+
+def render_revision_welcome(plan: dict) -> None:
+    """Welcome banner for revision mode showing current plan summary."""
+    name = plan.get("project_name", "Project")
+    desc = plan.get("description", "")
+    v1_count = len(plan.get("modules_v1", []))
+    v2_count = len(plan.get("modules_v2", []))
+    ep_count = len(plan.get("api_endpoints", []))
+
+    lines = [
+        f"  **Project:** {name}",
+        f"  **Description:** {desc[:120]}",
+        f"  **Modules:** {v1_count} V1, {v2_count} V2  |  **Endpoints:** {ep_count}",
+    ]
+
+    ts = plan.get("tech_stack", {})
+    if ts:
+        stack_parts = [f"{v}" for k, v in ts.items() if v and k != "other_tools"]
+        if stack_parts:
+            lines.append(f"  **Stack:** {', '.join(stack_parts[:5])}")
+
+    console.print(Panel(
+        Markdown("\n".join(lines)),
+        title="[bold cyan]Revision Mode — Existing Plan Loaded[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    ))
+    console.print()
+
+
+EDIT_SECTIONS = {
+    "modules": ("modules_v1", "V1 Modules"),
+    "modules_v2": ("modules_v2", "V2 Modules"),
+    "api": ("api_endpoints", "API Endpoints"),
+    "stack": ("tech_stack", "Tech Stack"),
+    "folders": ("folder_structure", "Folder Structure"),
+    "patterns": ("design_patterns", "Design Patterns"),
+    "description": ("description", "Description"),
+}
+
 
 def render_proposal(plan: dict) -> None:
     """Render the architecture proposal in a styled panel."""

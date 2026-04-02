@@ -128,6 +128,15 @@ def prefill_state_from_scan(state: dict) -> dict:
     if gaps:
         state["gaps_flagged"] = gaps
 
+    # Discovered features — pre-populate features_v1 from scan
+    discovered = ex.get("discovered_features", [])
+    if discovered:
+        # Use high/medium confidence features as confirmed v1 features
+        confirmed = [f["name"] for f in discovered
+                     if f.get("confidence") in ("high", "medium")]
+        if confirmed:
+            state["features_v1"] = confirmed
+
     return state
 
 # ---------------------------------------------------------------------------
@@ -386,55 +395,81 @@ def _apply_sliding_window(state: dict) -> tuple[str, list]:
 def _opening_message(state: dict) -> str:
     """Returns first message based on detected scenario.
     Now shows richer context: models, entry points, test coverage, infra."""
+    # Revision mode — acknowledge existing plan
+    if state.get("is_revision"):
+        plan = state.get("revision_base", {})
+        name = plan.get("project_name", "your project")
+        v1_count = len(plan.get("modules_v1", []))
+        ep_count = len(plan.get("api_endpoints", []))
+        return (
+            f"I've loaded your existing plan for **{name}** "
+            f"({v1_count} modules, {ep_count} endpoints).\n\n"
+            "What do you want to change? You can add features, swap tech, "
+            "refine modules, or restructure the architecture."
+        )
+
     if state["scenario"] == "empty":
         return "what are you building? Even one line is fine to start."
     s = state["existing_summary"]
     lang = s.get("language", "project")
     fw = s.get("framework", "unknown framework")
-    flds = ", ".join(s.get("top_folders", [])[:4])
+    flds = s.get("top_folders", [])[:4]
 
-    # Build rich context lines from deep scan
-    extras = []
-
-    # Project identity from manifest/README
+    # Extract data for display
     manifest = s.get("manifest", {})
-    if manifest.get("description"):
-        extras.append(f"Project: {manifest.get('name', '')} — {manifest['description']}")
-    elif s.get("readme_summary"):
-        extras.append(f"About: {s['readme_summary'][:150]}")
-
     classes = s.get("classes", [])
-    if classes:
-        # Show class names without file prefix for readability
-        cls_names = [c.split("::")[-1].split("(")[0].strip() for c in classes[:6]]
-        extras.append(f"Key classes: {', '.join(cls_names)}")
-
     models = s.get("models", [])
+    routes = s.get("routes", [])
+    entry_points = s.get("entry_points", [])
+    test_map = s.get("test_map", {})
+    infra = s.get("infra", {})
+    discovered = s.get("discovered_features", [])
+
+    # Header
+    lines = [f"Scanned your **{lang} / {fw}** project:\n"]
+
+    # Project identity
+    if manifest.get("description"):
+        proj_name = manifest.get('name', '')
+        lines.append(f"- **Project** — {proj_name}: {manifest['description']}")
+    elif s.get("readme_summary"):
+        lines.append(f"- **About** — {s['readme_summary'][:150]}")
+
+    # Structure
+    if flds:
+        lines.append(f"- **Folders** — {', '.join(flds)}")
+
+    # Code structure
+    if classes:
+        cls_names = [c.split("::")[-1].split("(")[0].strip() for c in classes[:6]]
+        lines.append(f"- **Classes** — {', '.join(cls_names)}")
+
+    # Models
     if models:
-        model_strs = []
+        model_parts = []
         for m in models[:5]:
             fields = m.get("fields", [])
             if fields:
-                model_strs.append(f"{m['name']}({', '.join(fields[:4])})")
+                model_parts.append(f"{m['name']}({', '.join(fields[:4])})")
             else:
-                model_strs.append(m["name"])
-        extras.append(f"DB Models: {', '.join(model_strs)}")
+                model_parts.append(m['name'])
+        lines.append(f"- **DB Models** — {', '.join(model_parts)}")
 
-    routes = s.get("routes", [])
+    # Routes
     if routes:
-        extras.append(f"Routes/endpoints: {len(routes)} found")
+        lines.append(f"- **Routes** — {len(routes)} endpoints")
 
-    entry_points = s.get("entry_points", [])
+    # Entry points
     if entry_points:
         eps = [e["file"] for e in entry_points[:3]]
-        extras.append(f"Entry points: {', '.join(eps)}")
+        lines.append(f"- **Entry pts** — {', '.join(eps)}")
 
-    test_map = s.get("test_map", {})
+    # Testing
     if test_map:
         test_count = sum(len(v.get("tests", [])) for v in test_map.values())
-        extras.append(f"Tests: {test_count} tests in {len(test_map)} files")
+        lines.append(f"- **Tests** — {test_count} tests across {len(test_map)} files")
 
-    infra = s.get("infra", {})
+    # Infrastructure
     if infra:
         infra_bits = []
         if infra.get("dockerfiles"):
@@ -444,16 +479,35 @@ def _opening_message(state: dict) -> str:
         if infra.get("github_actions"):
             infra_bits.append("GitHub Actions")
         if infra_bits:
-            extras.append(f"Infra: {', '.join(infra_bits)}")
+            lines.append(f"- **Infra** — {', '.join(infra_bits)}")
 
-    msg = (
-        f"I've deeply scanned your {lang} project using {fw}.\n"
-        f"Top-level folders: {flds}."
-    )
-    if extras:
-        msg += "\n" + "\n".join(extras)
-    msg += "\n\nwhat do you want to add or change?"
-    return msg
+    # Discovered features
+    if discovered:
+        high = [f["name"] for f in discovered if f.get("confidence") == "high"]
+        med = [f["name"] for f in discovered if f.get("confidence") == "medium"]
+        if high:
+            lines.append(f"- **Confirmed** — {', '.join(high[:8])}")
+        if med:
+            lines.append(f"- **Likely** — {', '.join(med[:6])}")
+
+    lines.append("\nWhat do you want to add or change?")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Revision mode — system prompt addendum for continuing from existing plan
+# ---------------------------------------------------------------------------
+
+REVISION_SYSTEM_ADDENDUM = """
+IMPORTANT — REVISION MODE:
+You are continuing a conversation about an EXISTING architecture plan.
+The current plan is shown below. The developer wants to modify it.
+Do NOT start from scratch. Focus ONLY on what they want to change.
+Keep questions minimal — the plan already has most answers.
+
+CURRENT PLAN:
+{plan_summary}
+"""
 
 
 # ---------------------------------------------------------------------------

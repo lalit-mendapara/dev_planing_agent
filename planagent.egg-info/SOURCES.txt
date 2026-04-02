@@ -7,6 +7,7 @@ planagent/conversation_manager.py
 planagent/llm.py
 planagent/output_writer.py
 planagent/plan_generator.py
+planagent/plan_manager.py
 planagent/state.py
 planagent/ui.py
 planagent.egg-info/PKG-INFO
@@ -20,4 +21,5 @@ planagent/guardrails/guard.py
 tests/test_context_reader.py
 tests/test_conversation.py
 tests/test_output.py
+tests/test_plan_manager.py
 tests/test_ui.py

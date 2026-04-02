@@ -40,6 +40,7 @@ SKIP ENTIRELY if already collected or visible in scan:
 - Infrastructure setup (scan reads Docker, CI/CD, Makefile)
 - Dependencies and packages (scan reads manifests)
 - Environment configuration (scan extracts env variable names)
+- Discovered application features (scan auto-detects features from routes, models, imports, folders, env keys, function names — treat "Confirmed" and "Likely" features as KNOWN FACTS about the codebase)
 
 GAP DETECTION (mention ONCE, briefly, in a single message):
 Based on project type AND what the scan reveals is missing, flag 2-3 missing things max. Do NOT ask about each gap individually — list them together and ask "should I include any of these?"

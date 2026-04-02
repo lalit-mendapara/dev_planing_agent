@@ -37,4 +37,9 @@ def create_initial_state() -> dict:
 
         # --- set by output_writer.py -------------------------
         "files_written": [],  # paths of files written
+
+        # --- Revision / versioning -------------------------
+        "is_revision": False,       # True if continuing from existing plan
+        "revision_base": None,      # original plan dict when revising
+        "plan_version": None,       # current version number after snapshot
     }

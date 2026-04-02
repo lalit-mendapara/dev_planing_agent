@@ -68,6 +68,28 @@ class TestParseAgentResponse:
         assert "I recommend" in text
         assert "Let me know" in text
 
+    def test_no_newline_before_closing_backticks(self):
+        """LLM sometimes puts closing ``` on the same line as the JSON."""
+        raw = (
+            "Which payment provider?\n\n"
+            "```options\n"
+            '["Stripe — strong APIs", "PayPal — flexible billing", "Custom webhook"]```'
+        )
+        text, options = parse_agent_response(raw)
+        assert len(options) == 3
+        assert "Stripe" in options[0]
+        assert "```options" not in text
+
+    def test_no_newlines_at_all(self):
+        """Options block with no newlines around JSON content."""
+        raw = (
+            "Pick one:\n\n"
+            '```options["A", "B", "C"]```'
+        )
+        text, options = parse_agent_response(raw)
+        assert len(options) == 3
+        assert "```options" not in text
+
     def test_conversation_complete_signal_preserved(self):
         raw = (
             "Great, I have everything.\n\n"

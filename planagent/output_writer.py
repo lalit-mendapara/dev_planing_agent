@@ -13,6 +13,16 @@ def write_all_outputs(state: dict) -> dict:
     plan = state["proposal"]
     written = []
 
+    # Auto-snapshot existing plan before overwriting
+    from planagent.plan_manager import snapshot_current
+    existing_ctx = out / "context.json"
+    if existing_ctx.exists():
+        msg = state.get("_snapshot_message", "Auto-snapshot before plan update")
+        version = snapshot_current(state["project_root"], message=msg)
+        if version:
+            state["plan_version"] = version
+            console.print(f"   [dim]📸 Saved v{version} snapshot[/dim]")
+
     files = {
         "plan.md": _plan_md(state),
         "architecture.md": _arch_md(plan),

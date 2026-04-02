@@ -175,6 +175,11 @@ def _full_scan(root: Path) -> dict:
     if tech_stack:
         index["tech_stack"] = tech_stack
 
+    # Automatic feature discovery (synthesize all signals into app features)
+    discovered_features = _discover_features(root, files_info, index)
+    if discovered_features:
+        index["discovered_features"] = discovered_features
+
     return index
 
 
@@ -1132,6 +1137,594 @@ def _detect_entry_points(root: Path, files_info: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Automatic feature discovery — synthesize raw signals into app features
+# ---------------------------------------------------------------------------
+
+# Maps: signal keywords → (feature_name, confidence_source)
+# Routes, folder names, class names, function names, imports, env keys
+# are all used as evidence to discover features.
+
+_FEATURE_ROUTE_SIGNALS: dict[str, str] = {
+    # Auth
+    "/login": "User Authentication",
+    "/logout": "User Authentication",
+    "/register": "User Registration",
+    "/signup": "User Registration",
+    "/auth": "User Authentication",
+    "/token": "Token-based Authentication",
+    "/refresh": "Token-based Authentication",
+    "/forgot-password": "Password Reset",
+    "/reset-password": "Password Reset",
+    "/verify-email": "Email Verification",
+    "/confirm": "Email Verification",
+    "/oauth": "OAuth / Social Login",
+    "/sso": "Single Sign-On",
+    "/2fa": "Two-Factor Authentication",
+    "/mfa": "Two-Factor Authentication",
+
+    # User management
+    "/users": "User Management",
+    "/profile": "User Profile",
+    "/account": "Account Management",
+    "/settings": "User Settings",
+    "/preferences": "User Preferences",
+    "/avatar": "User Profile",
+    "/roles": "Role Management",
+    "/permissions": "Permission Management",
+
+    # Content / CRUD
+    "/posts": "Content Management",
+    "/articles": "Content Management",
+    "/blog": "Blog System",
+    "/comments": "Commenting System",
+    "/reviews": "Review System",
+    "/ratings": "Rating System",
+    "/likes": "Like/Reaction System",
+    "/favorites": "Favorites/Bookmarks",
+    "/bookmarks": "Favorites/Bookmarks",
+    "/tags": "Tagging System",
+    "/categories": "Category Management",
+
+    # E-commerce
+    "/products": "Product Catalog",
+    "/cart": "Shopping Cart",
+    "/checkout": "Checkout Flow",
+    "/orders": "Order Management",
+    "/inventory": "Inventory Management",
+    "/wishlist": "Wishlist",
+    "/coupons": "Coupon/Discount System",
+    "/discounts": "Coupon/Discount System",
+
+    # Payments
+    "/payments": "Payment Processing",
+    "/billing": "Billing System",
+    "/invoices": "Invoice Management",
+    "/subscriptions": "Subscription Management",
+    "/plans": "Plan/Pricing Management",
+    "/refunds": "Refund Processing",
+    "/payouts": "Payout System",
+    "/transactions": "Transaction History",
+    "/webhook": "Webhook Integration",
+
+    # Communication
+    "/messages": "Messaging System",
+    "/chat": "Chat System",
+    "/conversations": "Chat System",
+    "/notifications": "Notification System",
+    "/emails": "Email System",
+    "/sms": "SMS Notifications",
+
+    # File management
+    "/upload": "File Upload",
+    "/uploads": "File Upload",
+    "/files": "File Management",
+    "/media": "Media Management",
+    "/images": "Image Management",
+    "/documents": "Document Management",
+    "/attachments": "File Attachments",
+
+    # Search & discovery
+    "/search": "Search",
+    "/explore": "Discovery/Explore",
+    "/feed": "Activity Feed",
+    "/timeline": "Timeline/Feed",
+    "/trending": "Trending Content",
+    "/recommendations": "Recommendation Engine",
+    "/suggest": "Autocomplete/Suggestions",
+
+    # Admin
+    "/admin": "Admin Panel",
+    "/dashboard": "Dashboard",
+    "/analytics": "Analytics",
+    "/reports": "Reporting",
+    "/stats": "Statistics/Metrics",
+    "/audit": "Audit Trail",
+    "/logs": "Activity Logging",
+
+    # Social
+    "/follow": "Follow System",
+    "/friends": "Friend System",
+    "/connections": "Connection System",
+    "/groups": "Group Management",
+    "/teams": "Team Management",
+    "/invitations": "Invitation System",
+    "/invite": "Invitation System",
+
+    # Location / maps
+    "/locations": "Location Management",
+    "/maps": "Map Integration",
+    "/addresses": "Address Management",
+    "/geocode": "Geocoding",
+
+    # Scheduling
+    "/events": "Event Management",
+    "/calendar": "Calendar System",
+    "/bookings": "Booking System",
+    "/appointments": "Appointment Scheduling",
+    "/schedule": "Scheduling System",
+    "/availability": "Availability Management",
+
+    # API
+    "/api/v": "Versioned API",
+    "/graphql": "GraphQL API",
+    "/health": "Health Check Endpoint",
+    "/status": "Status Endpoint",
+    "/docs": "API Documentation",
+
+    # Misc
+    "/export": "Data Export",
+    "/import": "Data Import",
+    "/webhooks": "Webhook Integration",
+    "/integrations": "Third-party Integrations",
+    "/config": "Configuration Management",
+}
+
+# Folder/module name → feature mapping
+_FEATURE_FOLDER_SIGNALS: dict[str, str] = {
+    "auth": "User Authentication",
+    "authentication": "User Authentication",
+    "accounts": "Account Management",
+    "users": "User Management",
+    "profiles": "User Profile",
+    "permissions": "Permission Management",
+    "rbac": "Role-Based Access Control",
+    "roles": "Role Management",
+    "payments": "Payment Processing",
+    "billing": "Billing System",
+    "subscriptions": "Subscription Management",
+    "orders": "Order Management",
+    "cart": "Shopping Cart",
+    "checkout": "Checkout Flow",
+    "products": "Product Catalog",
+    "catalog": "Product Catalog",
+    "inventory": "Inventory Management",
+    "notifications": "Notification System",
+    "messaging": "Messaging System",
+    "chat": "Chat System",
+    "emails": "Email System",
+    "mailer": "Email System",
+    "mail": "Email System",
+    "search": "Search",
+    "analytics": "Analytics",
+    "reports": "Reporting",
+    "dashboard": "Dashboard",
+    "admin": "Admin Panel",
+    "uploads": "File Upload",
+    "media": "Media Management",
+    "storage": "File Storage",
+    "tasks": "Background Tasks",
+    "jobs": "Background Jobs",
+    "workers": "Background Workers",
+    "scheduler": "Task Scheduling",
+    "cron": "Scheduled Jobs",
+    "cache": "Caching Layer",
+    "middleware": "Middleware Layer",
+    "webhooks": "Webhook Integration",
+    "integrations": "Third-party Integrations",
+    "api": "REST API",
+    "graphql": "GraphQL API",
+    "websocket": "WebSocket Support",
+    "realtime": "Realtime Features",
+    "events": "Event System",
+    "logging": "Logging System",
+    "audit": "Audit Trail",
+    "migrations": "Database Migrations",
+    "seeds": "Database Seeding",
+    "fixtures": "Test Fixtures",
+    "tests": "Test Suite",
+    "docs": "Documentation",
+    "i18n": "Internationalization",
+    "locales": "Localization",
+    "templates": "Template Rendering",
+    "export": "Data Export",
+    "import": "Data Import",
+    "feed": "Activity Feed",
+    "social": "Social Features",
+    "comments": "Commenting System",
+    "reviews": "Review System",
+    "ratings": "Rating System",
+    "tags": "Tagging System",
+    "categories": "Category Management",
+    "bookings": "Booking System",
+    "appointments": "Appointment Scheduling",
+    "calendar": "Calendar System",
+    "maps": "Map Integration",
+    "geo": "Geolocation",
+    "location": "Location Services",
+}
+
+# Import-based feature signals (library → feature)
+_FEATURE_IMPORT_SIGNALS: dict[str, str] = {
+    "stripe": "Payment Processing (Stripe)",
+    "razorpay": "Payment Processing (Razorpay)",
+    "paypal": "Payment Processing (PayPal)",
+    "braintree": "Payment Processing (Braintree)",
+    "sendgrid": "Email Notifications (SendGrid)",
+    "mailgun": "Email Notifications (Mailgun)",
+    "nodemailer": "Email Notifications",
+    "resend": "Email Notifications (Resend)",
+    "postmark": "Email Notifications (Postmark)",
+    "celery": "Background Task Processing",
+    "dramatiq": "Background Task Processing",
+    "rq": "Background Task Processing",
+    "bull": "Background Job Queue",
+    "bullmq": "Background Job Queue",
+    "socket.io": "Realtime (WebSocket)",
+    "websockets": "Realtime (WebSocket)",
+    "channels": "Realtime (Django Channels)",
+    "pusher": "Realtime (Pusher)",
+    "ably": "Realtime (Ably)",
+    "sse-starlette": "Server-Sent Events",
+    "elasticsearch": "Full-text Search (Elasticsearch)",
+    "opensearch": "Full-text Search (OpenSearch)",
+    "meilisearch": "Full-text Search (Meilisearch)",
+    "algolia": "Search (Algolia)",
+    "whoosh": "Full-text Search",
+    "boto3": "AWS Integration",
+    "google-cloud": "Google Cloud Integration",
+    "azure": "Azure Integration",
+    "cloudinary": "Image/Media Management (Cloudinary)",
+    "pillow": "Image Processing",
+    "sharp": "Image Processing",
+    "pdfkit": "PDF Generation",
+    "weasyprint": "PDF Generation",
+    "reportlab": "PDF Generation",
+    "twilio": "SMS/Voice (Twilio)",
+    "apscheduler": "Task Scheduling",
+    "django-celery-beat": "Periodic Task Scheduling",
+    "cron": "Scheduled Jobs",
+    "sentry-sdk": "Error Monitoring (Sentry)",
+    "sentry": "Error Monitoring (Sentry)",
+    "opentelemetry": "Distributed Tracing",
+    "prometheus": "Metrics Collection",
+    "graphene": "GraphQL API",
+    "strawberry": "GraphQL API",
+    "ariadne": "GraphQL API",
+    "apollo-server": "GraphQL API",
+    "grpcio": "gRPC API",
+    "grpc": "gRPC API",
+    "passlib": "Password Hashing",
+    "bcrypt": "Password Hashing",
+    "pyjwt": "JWT Authentication",
+    "python-jose": "JWT Authentication",
+    "jsonwebtoken": "JWT Authentication",
+    "passport": "Authentication (Passport.js)",
+    "next-auth": "Authentication (NextAuth)",
+    "django-allauth": "Social Authentication",
+    "social-auth": "Social Authentication",
+    "oauth": "OAuth Integration",
+    "oauthlib": "OAuth Integration",
+    "firebase-admin": "Firebase Integration",
+    "supabase": "Supabase Integration",
+}
+
+# Env key patterns → feature hints
+_FEATURE_ENV_SIGNALS: dict[str, str] = {
+    "STRIPE": "Payment Processing",
+    "PAYPAL": "Payment Processing",
+    "RAZORPAY": "Payment Processing",
+    "SENDGRID": "Email Notifications",
+    "MAILGUN": "Email Notifications",
+    "SMTP": "Email Sending",
+    "MAIL": "Email System",
+    "TWILIO": "SMS/Voice Notifications",
+    "S3_BUCKET": "Cloud File Storage (S3)",
+    "AWS_S3": "Cloud File Storage (S3)",
+    "CLOUDINARY": "Media Management",
+    "SENTRY": "Error Monitoring",
+    "REDIS": "Caching/Queue",
+    "CELERY": "Background Tasks",
+    "ELASTICSEARCH": "Search",
+    "ALGOLIA": "Search",
+    "FIREBASE": "Firebase Integration",
+    "SUPABASE": "Supabase Integration",
+    "PUSHER": "Realtime Notifications",
+    "WEBHOOK": "Webhook Integration",
+    "OAUTH": "OAuth Integration",
+    "GOOGLE_CLIENT": "Google OAuth",
+    "GITHUB_CLIENT": "GitHub OAuth",
+    "FACEBOOK_APP": "Facebook OAuth",
+    "RECAPTCHA": "CAPTCHA Protection",
+    "OPENAI": "AI/LLM Integration",
+    "LANGCHAIN": "AI/LLM Integration",
+}
+
+# Function/class name pattern → feature (regex patterns)
+_FEATURE_NAME_PATTERNS: list[tuple[str, str]] = [
+    (r"(?:send|dispatch)_?(?:email|mail|notification)", "Email Notifications"),
+    (r"(?:send|dispatch)_?sms", "SMS Notifications"),
+    (r"(?:send|push)_?notification", "Push Notifications"),
+    (r"(?:upload|save)_?(?:file|image|media|document|avatar)", "File Upload"),
+    (r"(?:resize|crop|thumbnail|optimize)_?image", "Image Processing"),
+    (r"generate_?(?:pdf|report|invoice|receipt)", "PDF/Report Generation"),
+    (r"(?:export|download)_?(?:csv|excel|pdf|data)", "Data Export"),
+    (r"(?:import|ingest)_?(?:csv|excel|data|bulk)", "Data Import"),
+    (r"(?:cache|invalidate_cache|clear_cache)", "Caching"),
+    (r"(?:rate_limit|throttle)", "Rate Limiting"),
+    (r"(?:search|full_text|fuzzy_search|autocomplete)", "Search"),
+    (r"(?:paginate|pagination|cursor)", "Pagination"),
+    (r"(?:soft_delete|restore|trash|archive)", "Soft Delete/Archive"),
+    (r"(?:audit|log_action|track_event|activity_log)", "Audit Trail"),
+    (r"(?:encrypt|decrypt|hash_password|verify_password)", "Security/Encryption"),
+    (r"(?:generate_token|verify_token|refresh_token)", "Token Management"),
+    (r"(?:schedule|cron|periodic|run_at)", "Task Scheduling"),
+    (r"(?:notify|broadcast|publish|emit_event)", "Event/Notification System"),
+    (r"(?:webhook|handle_webhook|process_webhook)", "Webhook Processing"),
+    (r"(?:validate|sanitize|clean_input)", "Input Validation"),
+    (r"(?:migrate|seed|rollback)", "Database Migrations"),
+    (r"(?:backup|snapshot|dump)", "Backup System"),
+    (r"(?:translate|localize|i18n|gettext)", "Internationalization"),
+]
+
+
+def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
+    """Discover application features by synthesizing multiple signals:
+    1. Route/endpoint patterns
+    2. Folder/module names
+    3. Library imports
+    4. Environment variable names
+    5. Function/class name patterns
+    6. Model names and fields
+    7. Decorator patterns
+
+    Returns a list of dicts: [{name, confidence, evidence: [str]}]
+    confidence: 'high' (3+ signals), 'medium' (2), 'low' (1)
+    """
+    # feature_name → set of evidence strings
+    evidence_map: dict[str, set[str]] = {}
+
+    def _add(feature: str, source: str):
+        evidence_map.setdefault(feature, set()).add(source)
+
+    # --- 1. Route/endpoint analysis ---
+    for rel, info in files_info.items():
+        sigs = info.get("signatures", {})
+        for route in sigs.get("routes", []):
+            if isinstance(route, dict):
+                path = route.get("path", "")
+                sig = route.get("sig", "")
+                route_str = path or sig
+            else:
+                route_str = str(route)
+            route_lower = route_str.lower()
+            for pattern, feature in _FEATURE_ROUTE_SIGNALS.items():
+                if pattern in route_lower:
+                    _add(feature, f"route: {route_str[:80]}")
+                    break
+
+    # --- 2. Folder/module names ---
+    seen_folders: set[str] = set()
+    for rel in files_info:
+        parts = Path(rel).parts
+        for part in parts[:-1]:  # skip the filename itself
+            lower = part.lower()
+            if lower not in seen_folders:
+                seen_folders.add(lower)
+                if lower in _FEATURE_FOLDER_SIGNALS:
+                    _add(_FEATURE_FOLDER_SIGNALS[lower],
+                         f"folder: {part}/")
+
+    # --- 3. Import-based feature detection ---
+    all_imports: set[str] = set()
+    for rel, info in files_info.items():
+        sigs = info.get("signatures", {})
+        for imp in sigs.get("imports", []):
+            if isinstance(imp, str):
+                all_imports.add(imp.lower())
+                # Add root package: "stripe.webhook" → "stripe"
+                root_pkg = imp.split(".")[0].lower()
+                all_imports.add(root_pkg)
+
+    manifest = index.get("manifest", {})
+    for dep in manifest.get("dependencies", []):
+        all_imports.add(dep.lower())
+
+    for signal, feature in _FEATURE_IMPORT_SIGNALS.items():
+        if signal.lower() in all_imports:
+            _add(feature, f"import: {signal}")
+
+    # --- 4. Environment variable signals ---
+    env_keys = index.get("env_keys", [])
+    for key in env_keys:
+        key_upper = key.upper()
+        for pattern, feature in _FEATURE_ENV_SIGNALS.items():
+            if pattern in key_upper:
+                _add(feature, f"env: {key}")
+                break
+
+    # --- 5. Function/class name pattern matching ---
+    for rel, info in files_info.items():
+        sigs = info.get("signatures", {})
+        # Check function names
+        for fn in sigs.get("functions", []):
+            fname = fn.get("name", "") if isinstance(fn, dict) else str(fn)
+            fname_lower = fname.lower()
+            for pattern, feature in _FEATURE_NAME_PATTERNS:
+                if re.search(pattern, fname_lower):
+                    _add(feature, f"function: {fname} in {rel}")
+                    break
+
+        # Check class names
+        for cls in sigs.get("classes", []):
+            if isinstance(cls, dict):
+                cname = cls.get("name", "")
+                # Model-based feature detection
+                if cls.get("is_model"):
+                    model_name = cname.lower()
+                    _MODEL_FEATURES = {
+                        "user": "User Management",
+                        "profile": "User Profile",
+                        "product": "Product Catalog",
+                        "order": "Order Management",
+                        "orderitem": "Order Management",
+                        "payment": "Payment Processing",
+                        "transaction": "Transaction History",
+                        "invoice": "Invoice Management",
+                        "subscription": "Subscription Management",
+                        "notification": "Notification System",
+                        "message": "Messaging System",
+                        "comment": "Commenting System",
+                        "review": "Review System",
+                        "rating": "Rating System",
+                        "tag": "Tagging System",
+                        "category": "Category Management",
+                        "address": "Address Management",
+                        "cart": "Shopping Cart",
+                        "cartitem": "Shopping Cart",
+                        "wishlist": "Wishlist",
+                        "booking": "Booking System",
+                        "appointment": "Appointment Scheduling",
+                        "event": "Event Management",
+                        "ticket": "Ticketing System",
+                        "coupon": "Coupon/Discount System",
+                        "discount": "Coupon/Discount System",
+                        "refund": "Refund Processing",
+                        "invitation": "Invitation System",
+                        "team": "Team Management",
+                        "organization": "Organization Management",
+                        "role": "Role Management",
+                        "permission": "Permission Management",
+                        "auditlog": "Audit Trail",
+                        "activitylog": "Activity Logging",
+                        "file": "File Management",
+                        "media": "Media Management",
+                        "image": "Image Management",
+                        "document": "Document Management",
+                        "page": "CMS/Page Management",
+                        "post": "Content Management",
+                        "article": "Content Management",
+                        "blog": "Blog System",
+                    }
+                    for model_key, feature in _MODEL_FEATURES.items():
+                        if model_name == model_key or model_name.endswith(model_key):
+                            _add(feature, f"model: {cname} in {rel}")
+                            break
+
+                # Enum-based feature hints
+                if cls.get("is_enum"):
+                    enum_name = cname.lower()
+                    if any(k in enum_name for k in ("status", "state", "type", "role")):
+                        members = cls.get("enum_members", [])
+                        members_lower = [m.lower() for m in members]
+                        if any(m in members_lower for m in
+                               ("active", "inactive", "suspended", "banned")):
+                            _add("Account Status Management",
+                                 f"enum: {cname} in {rel}")
+                        if any(m in members_lower for m in
+                               ("pending", "processing", "completed",
+                                "cancelled", "refunded")):
+                            _add("Order/Workflow Management",
+                                 f"enum: {cname} in {rel}")
+                        if any(m in members_lower for m in
+                               ("admin", "moderator", "user", "editor")):
+                            _add("Role-Based Access Control",
+                                 f"enum: {cname} in {rel}")
+
+    # --- 6. Decorator-based features ---
+    for rel, info in files_info.items():
+        sigs = info.get("signatures", {})
+        for dec in sigs.get("decorator_patterns", []):
+            dec_lower = dec.lower() if isinstance(dec, str) else ""
+            if any(k in dec_lower for k in ("login_required", "auth",
+                                             "permission", "jwt_required",
+                                             "protected")):
+                _add("Authentication & Authorization",
+                     f"decorator: {dec}")
+            if any(k in dec_lower for k in ("rate_limit", "throttle",
+                                             "ratelimit")):
+                _add("Rate Limiting", f"decorator: {dec}")
+            if any(k in dec_lower for k in ("cache", "cached",
+                                             "memoize")):
+                _add("Caching", f"decorator: {dec}")
+            if any(k in dec_lower for k in ("celery", "task",
+                                             "shared_task", "job")):
+                _add("Background Tasks", f"decorator: {dec}")
+            if any(k in dec_lower for k in ("schedule", "periodic",
+                                             "crontab")):
+                _add("Task Scheduling", f"decorator: {dec}")
+            if any(k in dec_lower for k in ("validate", "validator")):
+                _add("Input Validation", f"decorator: {dec}")
+            if any(k in dec_lower for k in ("middleware",)):
+                _add("Middleware Layer", f"decorator: {dec}")
+
+    # --- 7. README-based feature hints ---
+    readme = index.get("readme", "")
+    if readme:
+        readme_lower = readme.lower()
+        _README_FEATURES = {
+            "authentication": "User Authentication",
+            "authorization": "Authorization",
+            "payment": "Payment Processing",
+            "notification": "Notification System",
+            "real-time": "Realtime Features",
+            "real time": "Realtime Features",
+            "websocket": "WebSocket Support",
+            "file upload": "File Upload",
+            "search": "Search",
+            "analytics": "Analytics",
+            "dashboard": "Dashboard",
+            "api": "REST API",
+            "graphql": "GraphQL API",
+            "microservice": "Microservice Architecture",
+            "email": "Email System",
+            "chat": "Chat System",
+            "e-commerce": "E-commerce",
+            "ecommerce": "E-commerce",
+            "marketplace": "Marketplace",
+            "subscription": "Subscription Management",
+            "billing": "Billing System",
+            "multi-tenant": "Multi-tenancy",
+        }
+        for keyword, feature in _README_FEATURES.items():
+            if keyword in readme_lower:
+                _add(feature, "readme mention")
+
+    # --- Build final feature list sorted by evidence count ---
+    features = []
+    for name, evidences in evidence_map.items():
+        count = len(evidences)
+        if count >= 3:
+            confidence = "high"
+        elif count >= 2:
+            confidence = "medium"
+        else:
+            confidence = "low"
+        features.append({
+            "name": name,
+            "confidence": confidence,
+            "evidence_count": count,
+            "evidence": sorted(evidences)[:5],  # cap evidence list
+        })
+
+    # Sort: high confidence first, then by evidence count
+    _CONF_ORDER = {"high": 0, "medium": 1, "low": 2}
+    features.sort(key=lambda f: (_CONF_ORDER[f["confidence"]],
+                                  -f["evidence_count"]))
+
+    return features[:40]  # cap at 40 features
+
+
+# ---------------------------------------------------------------------------
 # Incremental update — only re-scan changed files
 # ---------------------------------------------------------------------------
 
@@ -1219,6 +1812,12 @@ def _incremental_update(root: Path, index: dict, changed: list[str],
         index["tech_stack"] = tech_stack
     elif "tech_stack" in index:
         del index["tech_stack"]
+
+    discovered_features = _discover_features(root, files_info, index)
+    if discovered_features:
+        index["discovered_features"] = discovered_features
+    elif "discovered_features" in index:
+        del index["discovered_features"]
 
     return index
 
@@ -1364,6 +1963,8 @@ def _build_summary(root: Path, index: dict) -> dict:
         summary["entry_points"] = index["entry_points"]
     if index.get("tech_stack"):
         summary["tech_stack"] = index["tech_stack"]
+    if index.get("discovered_features"):
+        summary["discovered_features"] = index["discovered_features"]
 
     return summary
 
@@ -1537,6 +2138,21 @@ def _build_tier1_summary(summary: dict, index: dict) -> str:
         parts.append(f"Test coverage: {len(test_map)} test files, {test_count} tests")
         if tested_modules:
             parts.append(f"Tested modules: {', '.join(tested_modules[:10])}")
+
+    # --- Discovered features ---
+    features = summary.get("discovered_features", [])
+    if features:
+        parts.append("--- DISCOVERED APPLICATION FEATURES ---")
+        high = [f for f in features if f["confidence"] == "high"]
+        med = [f for f in features if f["confidence"] == "medium"]
+        low = [f for f in features if f["confidence"] == "low"]
+        if high:
+            parts.append(f"Confirmed features: {', '.join(f['name'] for f in high)}")
+        if med:
+            parts.append(f"Likely features: {', '.join(f['name'] for f in med)}")
+        if low:
+            parts.append(f"Possible features: {', '.join(f['name'] for f in low[:10])}")
+        parts.append("--- END DISCOVERED FEATURES ---")
 
     return "\n".join(parts)
 
