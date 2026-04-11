@@ -10,7 +10,7 @@ def create_initial_state() -> dict:
 
         # --- Set by conversation_manager.py -------------------------
         "conversation_history": [],  # [{role, content}, ....]
-        "conversation_summary": "",  # rolling summary of older turns
+        "conversation_summary": "",  # legacy — kept for compatibility
         "last_extracted_turn": 0,    # track which turns have been state-extracted
         "project_goal": None,        # one-line description
         "user_types": [],            # ["customers","admins","moderators"]
@@ -37,6 +37,13 @@ def create_initial_state() -> dict:
 
         # --- set by output_writer.py -------------------------
         "files_written": [],  # paths of files written
+
+        # --- RAG knowledge retrieval -------------------------
+        "rag_context": [],          # retrieved knowledge chunks for current turn
+        "rag_last_query": "",       # last RAG query (avoid redundant fetches)
+
+        # --- Conversation store (token optimization) -------------------------
+        "_conversation_store": None,  # ConversationStore instance (set by run_conversation)
 
         # --- Revision / versioning -------------------------
         "is_revision": False,       # True if continuing from existing plan

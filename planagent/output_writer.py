@@ -30,6 +30,11 @@ def write_all_outputs(state: dict) -> dict:
         "roadmap.md": _roadmap_md(plan),
     }
 
+    # Generate existing_features.md when existing features are detected
+    existing = plan.get("existing_features", [])
+    if existing:
+        files["existing_features.md"] = _existing_features_md(plan, state)
+
     for name, content in files.items():
         p = out / name
         p.write_text(content, encoding="utf-8")
@@ -120,8 +125,24 @@ def write_token_report(state: dict) -> str:
 def _plan_md(state):
     plan = state["proposal"]
     lines = [f"# {plan.get('project_name','project')} - plan\n",
-             f"{plan.get('description','')}\n",
-             "## V1 Features\n"]
+             f"{plan.get('description','')}\n"]
+
+    # Existing features notice
+    existing = plan.get("existing_features", [])
+    if existing:
+        lines.append("## Already Implemented\n")
+        lines.append(f"> {len(existing)} features are already built in the existing codebase.")
+        lines.append("> See [existing_features.md](existing_features.md) for full details with file locations.\n")
+        for ef in existing:
+            name = ef.get("name", "")
+            loc = ef.get("location", "")
+            entry = f"- **{name}**"
+            if loc:
+                entry += f" — `{loc}`"
+            lines.append(entry)
+        lines.append("")
+
+    lines.append("## V1 Features (New)\n")
     for m in plan.get("modules_v1", []):
         lines.append(f"- **{m['name']}**: {m.get('description','')}")
     lines += ["\n ## V2 Features  (Deffered) \n"]
@@ -164,8 +185,140 @@ def _api_md(plan):
     
     return "\n".join(lines)
 
+def _existing_features_md(plan: dict, state: dict) -> str:
+    """Generate existing_features.md — documents what's already implemented with locations.
+    This covers ALL types of existing functionality: auth, payments, models, routes,
+    background tasks, file uploads, search, notifications, etc."""
+    existing = plan.get("existing_features", [])
+    if not existing:
+        return ""
+
+    lines = [
+        "# Existing Features\n",
+        "This document lists features and functionality **already implemented** in your project.",
+        "These were auto-detected by scanning your codebase.\n",
+        "> **Do not rebuild these.** Integrate with them when building new features.\n",
+    ]
+
+    # Group features by confidence/category for readability
+    for ef in existing:
+        name = ef.get("name", "Unknown")
+        status = ef.get("status", "implemented")
+        location = ef.get("location", "")
+        details = ef.get("details", "")
+
+        lines.append(f"## {name}\n")
+        lines.append(f"- **Status**: {status}")
+        if location:
+            lines.append(f"- **Location**: `{location}`")
+        if details:
+            lines.append(f"- **Details**: {details}")
+        lines.append("")
+
+    # Enrich with raw scan data (routes, models, functions) if available
+    idx = state.get("context_index", {})
+    discovered = []
+    ex = state.get("existing_summary", {})
+    if ex:
+        discovered = ex.get("discovered_features", [])
+    if not discovered and idx:
+        discovered = idx.get("discovered_features", [])
+
+    # Build a lookup of feature names already shown
+    shown_names = {ef.get("name", "").lower() for ef in existing}
+
+    # Add detailed location appendix from scan data
+    has_appendix = False
+    for feat in discovered:
+        if feat.get("confidence") not in ("high", "medium"):
+            continue
+        locations = feat.get("locations", [])
+        if not locations:
+            continue
+        feat_name = feat.get("name", "")
+        if feat_name.lower() not in shown_names:
+            continue
+
+        if not has_appendix:
+            lines.append("---\n")
+            lines.append("# Detailed File Locations\n")
+            lines.append("Precise file paths and line numbers for each existing feature.\n")
+            has_appendix = True
+
+        lines.append(f"### {feat_name}\n")
+        lines.append("| Type | Location | Details |")
+        lines.append("|------|----------|---------|")
+
+        for loc in locations[:8]:
+            loc_type = loc.get("type", "")
+            file = loc.get("file", "")
+            line_num = loc.get("line", 0)
+
+            if loc_type == "route":
+                path = loc.get("path", "")
+                fn = loc.get("function", "")
+                loc_str = f"`{file}`" if file else ""
+                if fn:
+                    loc_str += f" :: `{fn}()`"
+                if line_num:
+                    loc_str += f" (line {line_num})"
+                lines.append(f"| Route | {loc_str} | `{path}` |")
+
+            elif loc_type == "model":
+                model_name = loc.get("name", "")
+                fields = loc.get("fields", [])
+                loc_str = f"`{file}`" if file else ""
+                if line_num:
+                    loc_str += f" (line {line_num})"
+                detail = f"`{model_name}`"
+                if fields:
+                    detail += f" — fields: {', '.join(f'`{f}`' for f in fields[:6])}"
+                lines.append(f"| Model | {loc_str} | {detail} |")
+
+            elif loc_type == "function":
+                fn_name = loc.get("name", "")
+                loc_str = f"`{file}`" if file else ""
+                if line_num:
+                    loc_str += f" (line {line_num})"
+                lines.append(f"| Function | {loc_str} | `{fn_name}()` |")
+
+            elif loc_type == "folder":
+                path = loc.get("path", "")
+                lines.append(f"| Module | `{path}` | directory |")
+
+            elif loc_type == "import":
+                pkg = loc.get("package", "")
+                lines.append(f"| Package | — | `{pkg}` |")
+
+            elif loc_type == "env":
+                key = loc.get("key", "")
+                lines.append(f"| Config | `.env` | `{key}` |")
+
+            elif loc_type in ("decorator", "enum"):
+                dec_name = loc.get("name", "")
+                loc_str = f"`{file}`" if file else ""
+                lines.append(f"| {loc_type.title()} | {loc_str} | `{dec_name}` |")
+
+        lines.append("")
+
+    lines.append("---\n")
+    lines.append(f"*Generated by PlanAgent on {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+
+    return "\n".join(lines)
+
+
 def _roadmap_md(plan):
-    lines = ["# Roadmap\n","## V1 - Launch \n"]
+    lines = ["# Roadmap\n"]
+
+    # Already implemented (no work needed)
+    existing = plan.get("existing_features", [])
+    if existing:
+        lines.append("## Already Implemented (No Work Needed)\n")
+        for ef in existing:
+            lines.append(f"- [x] {ef.get('name', '')}")
+        lines.append("")
+
+    lines.append("## V1 - Launch \n")
     for m in plan.get("modules_v1",[]):
         lines.append(f"- [ ] {m['name']}")
     lines += ["\n ## V2 - After Launch\n"]

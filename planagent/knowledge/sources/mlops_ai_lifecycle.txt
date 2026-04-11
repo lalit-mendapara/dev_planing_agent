@@ -1,0 +1,921 @@
+================================================================
+MLOPS / AI LIFECYCLE DESIGN — FULL KNOWLEDGE SOURCE MATERIAL
+================================================================
+Category: MLOps / AI Lifecycle Design
+Sub-categories: Ingestion, Training, Serving, Monitoring
+Purpose: Source material for RAG vector DB — Plan & Architect Agent
+================================================================
+
+
+----------------------------------------------------------------
+SECTION 1: WHAT IS MLOPS
+----------------------------------------------------------------
+
+MLOps (Machine Learning Operations) is the set of practices, tools, and processes that
+standardize and automate the lifecycle of machine learning and AI models — from data
+ingestion and model training, to deployment, serving, and continuous monitoring in production.
+
+MLOps is the intersection of:
+- ML (Machine Learning) — model development, training, evaluation
+- Dev (Software Development) — code quality, versioning, CI/CD
+- Ops (Operations) — deployment, infrastructure, monitoring, reliability
+
+WHY MLOPS EXISTS:
+The core problem MLOps solves:
+- 87% of ML models never make it to production (without MLOps practices)
+- Models that do reach production degrade over time (data drift, concept drift)
+- Without MLOps, each model deployment is a manual, error-prone, one-off process
+- ML teams spend 80% of time on data preparation and infrastructure, not modeling
+
+With MLOps:
+- Reproducible experiments — same code + data = same model every time
+- Automated pipelines — data → train → evaluate → deploy without manual steps
+- Model versioning — track every model version and its performance
+- Continuous monitoring — detect when model quality degrades in production
+- Fast iteration — deploy improvements quickly and safely
+
+MLOPS MATURITY LEVELS:
+Level 0 — Manual process:
+  - Data scientists train models manually in notebooks
+  - Model deployed manually as a script
+  - No automation, no versioning, no monitoring
+  - Suitable for: proof of concept only
+
+Level 1 — ML Pipeline automation:
+  - Automated training pipeline triggered by new data or schedule
+  - Model versioning and experiment tracking
+  - Basic model monitoring
+  - Suitable for: small production systems
+
+Level 2 — CI/CD for ML:
+  - Full CI/CD pipeline for model code and data
+  - Automated testing (unit tests, data validation, model evaluation)
+  - Automated deployment on passing tests
+  - Advanced monitoring with automatic retraining triggers
+  - Suitable for: large production systems with frequent model updates
+
+AI LIFECYCLE vs ML LIFECYCLE:
+Traditional ML lifecycle:
+Data → Feature Engineering → Model Training → Evaluation → Deployment → Monitoring
+
+Modern AI/LLM lifecycle (more relevant to your work):
+Data Ingestion → Embedding/Fine-tuning → Model Serving → Prompt Engineering →
+Evaluation → Monitoring → Reingestion/Retraining
+
+The four phases of MLOps / AI Lifecycle:
+1. Ingestion — collecting, processing, and preparing data
+2. Training — building, fine-tuning, and evaluating models
+3. Serving — deploying models and making them available via API
+4. Monitoring — tracking model performance and health in production
+
+MASTER DECISION RULE:
+- "custom ML model from scratch" → full MLOps lifecycle
+- "fine-tuning existing LLM" → Training + Serving + Monitoring phases
+- "RAG system with vector DB" → Ingestion (embedding pipeline) + Serving + Monitoring
+- "using pre-trained LLM API only" → Serving + Monitoring phases
+- "data pipeline for AI" → Ingestion phase focus
+
+
+----------------------------------------------------------------
+SECTION 2: INGESTION — DATA PIPELINES
+----------------------------------------------------------------
+
+DEFINITION:
+The ingestion phase covers all processes related to collecting raw data from various sources,
+validating it, transforming it into a usable format, and storing it in a location where it
+can be used for model training, fine-tuning, or RAG retrieval.
+
+Core principle: Garbage in, garbage out. The quality of your AI system is fundamentally
+limited by the quality of your data pipeline.
+
+DATA INGESTION PIPELINE OVERVIEW:
+[Raw Data Sources]
+       ↓
+[Data Collection / Extraction]
+       ↓
+[Data Validation]
+       ↓
+[Data Cleaning / Preprocessing]
+       ↓
+[Feature Engineering / Transformation]
+       ↓
+[Data Storage]
+       ↓
+[Ready for Training / Embedding / Fine-tuning]
+
+DATA SOURCES:
+1. Structured data:
+   - Relational databases (PostgreSQL, MySQL)
+   - CSV, Excel files
+   - APIs returning JSON/XML
+   - Data warehouses (BigQuery, Snowflake, Redshift)
+
+2. Unstructured data:
+   - PDF documents, DOCX files, TXT files
+   - Web pages (HTML)
+   - Images, videos, audio
+   - Emails, chat logs
+
+3. Semi-structured data:
+   - JSON files
+   - XML files
+   - Log files
+
+4. Real-time streaming data:
+   - Kafka event streams
+   - WebSocket feeds
+   - IoT sensor data
+   - User behavior events
+
+DATA COLLECTION METHODS:
+1. Batch ingestion — collect data in large batches at scheduled intervals
+   - Tools: Apache Airflow, Prefect, Dagster, Celery beat
+   - Use when: data doesn't need to be real-time, large volume historical data
+   - Example: ingest all new PDFs uploaded today at midnight
+
+2. Real-time streaming ingestion — process data as it arrives
+   - Tools: Apache Kafka, Apache Flink, Spark Streaming
+   - Use when: data must be processed immediately
+   - Example: ingest user behavior events for real-time recommendation
+
+3. Micro-batch ingestion — small batches at very frequent intervals
+   - Compromise between batch and streaming
+   - Tools: Spark Structured Streaming
+   - Use when: near-real-time is sufficient, true streaming is complex
+
+4. Event-triggered ingestion — ingestion triggered by an event
+   - Tools: Celery workers, AWS Lambda, Cloud Functions
+   - Use when: ingest when something specific happens (file uploaded, form submitted)
+   - Example: PDF uploaded → trigger ingestion worker → chunk → embed → store in Qdrant
+
+DATA VALIDATION:
+Every ingestion pipeline must validate data before processing.
+Validation types:
+1. Schema validation — does data match expected structure? (column names, types)
+2. Range validation — are values within expected ranges? (age > 0, price > 0)
+3. Null checks — are required fields present?
+4. Duplicate detection — are there duplicate records?
+5. Distribution checks — has data distribution changed significantly from baseline?
+6. Referential integrity — do foreign keys reference valid records?
+
+Tools:
+- Great Expectations — data validation framework
+- Pydantic — schema validation in Python (your stack)
+- Pandera — pandas DataFrame validation
+- dbt tests — SQL-based data validation in data warehouses
+
+DATA CLEANING AND PREPROCESSING:
+1. Handling missing values:
+   - Remove rows with missing critical fields
+   - Impute with mean/median/mode for numerical fields
+   - Use "Unknown" or sentinel value for categorical fields
+   - Use LLM to infer missing values for text fields (advanced)
+
+2. Removing duplicates:
+   - Exact duplicates — hash-based deduplication
+   - Near-duplicates — MinHash, SimHash, embedding similarity
+
+3. Text preprocessing (for NLP/LLM tasks):
+   - Remove HTML tags, special characters, excessive whitespace
+   - Normalize unicode characters
+   - Language detection and filtering
+   - PII (Personally Identifiable Information) removal/masking
+
+4. Normalization and standardization:
+   - Normalize numerical features (min-max scaling, z-score)
+   - Standardize date formats, phone numbers, addresses
+   - Map categorical variables to consistent values
+
+DATA VERSIONING:
+Every dataset used for training or embedding must be versioned.
+Why: if model quality drops, you need to know which data caused it.
+Tools:
+- DVC (Data Version Control) — git for datasets
+- Delta Lake — versioned data lake (ACID transactions on data files)
+- MLflow Datasets — track datasets alongside experiments
+- Simple approach: store dataset snapshots with timestamp in S3/GCS
+
+FEATURE ENGINEERING (for traditional ML):
+Feature engineering = transforming raw data into features that ML models can learn from.
+- Numerical: scaling, binning, polynomial features, log transforms
+- Categorical: one-hot encoding, label encoding, target encoding
+- Text: TF-IDF, word embeddings, sentence embeddings
+- Time-series: lag features, rolling averages, seasonality encoding
+- Geospatial: distance calculations, region encoding
+
+FEATURE STORES:
+A feature store is a centralized repository for storing, sharing, and serving ML features.
+- Offline store: historical features for model training (data warehouse)
+- Online store: real-time features for model serving (Redis, DynamoDB)
+- Tools: Feast, Tecton, Hopsworks, AWS SageMaker Feature Store
+- Use when: multiple models share the same features, feature reuse is important
+
+INGESTION FOR RAG SYSTEMS (LLM-specific):
+For RAG systems, ingestion means: load documents → chunk → embed → store in vector DB
+This is covered in depth in the AI-Native System Design section.
+Additional considerations:
+- Incremental ingestion: only re-ingest changed/new documents (not entire corpus)
+- Ingestion scheduling: trigger on document upload or run nightly batch
+- Ingestion monitoring: track how many chunks were created, embedding errors, storage size
+- Deduplication: detect and skip already-ingested documents (hash of content)
+
+ORCHESTRATION TOOLS FOR INGESTION PIPELINES:
+1. Apache Airflow — most popular, DAG-based workflow orchestration
+   - Define pipelines as Python DAGs
+   - Schedule, monitor, retry failed tasks
+   - Best for: complex batch pipelines with many steps and dependencies
+
+2. Prefect — modern Airflow alternative, easier to use
+   - Python-native, less configuration overhead
+   - Best for: teams moving away from Airflow
+
+3. Dagster — asset-based orchestration, strong data lineage
+   - Best for: data engineering teams needing strong lineage tracking
+
+4. Celery + Celery Beat — task queue + scheduler (your stack)
+   - Best for: Python-native async tasks integrated with Django/FastAPI
+   - Celery Beat for scheduled ingestion jobs
+
+5. Apache Kafka + Kafka Connect — for streaming ingestion pipelines
+   - Kafka Connect has pre-built connectors for databases, S3, APIs
+
+DECISION RULE — INGESTION:
+- "documents uploaded by users" → event-triggered ingestion (Celery task)
+- "nightly data refresh" → scheduled batch ingestion (Celery Beat or Airflow)
+- "real-time user events" → streaming ingestion (Kafka)
+- "complex multi-step data pipeline" → Airflow or Prefect
+- "simple Python async task" → Celery (your stack)
+
+
+----------------------------------------------------------------
+SECTION 3: TRAINING — MODEL BUILDING AND FINE-TUNING
+----------------------------------------------------------------
+
+DEFINITION:
+The training phase covers the process of building ML models from data — including
+experiment tracking, model training, hyperparameter tuning, evaluation, and model
+registration. For LLM-based systems, this phase includes fine-tuning pre-trained models.
+
+Core principle: Systematic, reproducible experimentation with rigorous evaluation
+before any model reaches production.
+
+TRAINING PIPELINE OVERVIEW:
+[Prepared Dataset]
+       ↓
+[Experiment Definition] — model architecture, hyperparameters, training config
+       ↓
+[Model Training] — fit model to training data
+       ↓
+[Evaluation] — measure performance on held-out test set
+       ↓
+[Hyperparameter Tuning] — optimize model configuration
+       ↓
+[Model Registration] — save best model to model registry
+       ↓
+[Ready for Serving]
+
+EXPERIMENT TRACKING:
+Every training run must be tracked — if you don't track experiments, you cannot
+reproduce results or understand why one model performs better than another.
+
+What to track per experiment:
+- Code version (Git commit hash)
+- Dataset version and size
+- Hyperparameters (learning rate, batch size, epochs, architecture)
+- Training metrics over time (loss curve, accuracy, F1)
+- Evaluation metrics on test set
+- Training duration and compute cost
+- Model artifacts (weights file, tokenizer, config)
+
+Tools:
+- MLflow — most popular, open source, self-hostable
+- Weights & Biases (W&B) — feature-rich, cloud-based, excellent visualizations
+- Neptune.ai — experiment tracking and model registry
+- Comet ML — experiment tracking platform
+- TensorBoard — TensorFlow/PyTorch training visualization
+- Simple: log to PostgreSQL + visualize with Grafana
+
+TRADITIONAL ML TRAINING:
+
+Model types and when to use:
+1. Linear/Logistic Regression — simple, interpretable, fast
+   Use when: linear relationship between features and target, baseline model
+
+2. Decision Trees / Random Forest / XGBoost — tree-based, powerful
+   Use when: tabular data, feature interactions, good out-of-the-box performance
+   XGBoost is the gold standard for tabular ML competitions
+
+3. Neural Networks (Deep Learning) — high capacity, learns complex patterns
+   Use when: images, audio, text, sequences, large datasets
+   Frameworks: PyTorch (research standard), TensorFlow/Keras (production)
+
+4. Clustering (K-Means, DBSCAN) — unsupervised, find groups in data
+   Use when: no labels, want to discover natural groupings
+
+5. Dimensionality Reduction (PCA, UMAP, t-SNE) — reduce feature dimensions
+   Use when: high-dimensional data visualization, preprocessing before other models
+
+HYPERPARAMETER TUNING:
+- Grid Search — exhaustive search over parameter grid (slow, guaranteed optimal in grid)
+- Random Search — random sampling from parameter space (faster, often as good)
+- Bayesian Optimization — learns which parameters to try next from past results (most efficient)
+- Tools: Optuna (best Python option), Ray Tune, Hyperopt
+
+CROSS-VALIDATION:
+- K-Fold CV: split data into K folds, train on K-1, test on 1, repeat K times
+- Stratified K-Fold: maintain class distribution in each fold
+- Time-Series Split: respect temporal order — never train on future data
+- Always use CV for evaluation, not a single train/test split
+
+MODEL EVALUATION METRICS:
+
+Classification:
+- Accuracy — overall correct predictions (misleading for imbalanced classes)
+- Precision — of predicted positives, how many were actually positive
+- Recall — of actual positives, how many did we correctly predict
+- F1 Score — harmonic mean of precision and recall (balanced metric)
+- AUC-ROC — model's ability to distinguish classes
+- Confusion Matrix — breakdown of TP, FP, TN, FN
+
+Regression:
+- MAE (Mean Absolute Error) — average absolute prediction error
+- MSE (Mean Squared Error) — penalizes large errors more
+- RMSE (Root MSE) — same units as target variable
+- R² (R-squared) — proportion of variance explained by model
+
+LLM / NLP Evaluation:
+- BLEU — n-gram overlap between generated and reference text (translation quality)
+- ROUGE — recall-oriented, overlap for summarization evaluation
+- BERTScore — semantic similarity using BERT embeddings
+- Perplexity — how well model predicts a sample (lower = better)
+- Human evaluation — most reliable but expensive
+
+LLM FINE-TUNING:
+Fine-tuning adapts a pre-trained LLM to a specific task or domain by training it
+further on domain-specific data.
+
+When to fine-tune vs RAG:
+- RAG: model needs access to specific knowledge → use RAG (no training needed)
+- Fine-tune: model needs to change its BEHAVIOR or OUTPUT STYLE → fine-tune
+- Fine-tune: specific task where few-shot prompting is insufficient
+- Fine-tune: cost optimization — smaller fine-tuned model can outperform larger general model
+
+Fine-tuning approaches:
+
+1. Full Fine-Tuning:
+   - Update all model weights
+   - Requires significant GPU resources (A100, H100)
+   - Best quality but most expensive
+   - Use when: budget available, large domain-specific dataset
+
+2. LoRA (Low-Rank Adaptation) — most popular:
+   - Freeze original weights, add small trainable adapter matrices
+   - 10-100x fewer trainable parameters than full fine-tuning
+   - Near full fine-tuning quality at fraction of cost
+   - Use when: limited GPU, need efficient fine-tuning
+   - Tools: PEFT library (Hugging Face)
+
+3. QLoRA (Quantized LoRA):
+   - LoRA + model quantization (4-bit or 8-bit)
+   - Can fine-tune 7B-13B models on single consumer GPU (RTX 3090/4090)
+   - Use when: very limited compute, smaller models
+
+4. Instruction Fine-Tuning:
+   - Fine-tune on instruction-following format (prompt → response pairs)
+   - Makes model better at following user instructions
+   - Format: {"instruction": "...", "input": "...", "output": "..."}
+
+5. RLHF (Reinforcement Learning from Human Feedback):
+   - Train reward model on human preferences
+   - Fine-tune LLM using RL to maximize reward
+   - Used by OpenAI for ChatGPT, Anthropic for Claude
+   - Very complex, requires large team and resources
+
+Fine-tuning dataset requirements:
+- Minimum: 100-500 high-quality examples for basic adaptation
+- Good: 1,000-10,000 examples for task-specific fine-tuning
+- Excellent: 10,000+ examples for strong domain adaptation
+- Quality > Quantity — 500 excellent examples beats 5,000 mediocre ones
+
+Fine-tuning infrastructure:
+- Small models (< 7B): single A100 80GB or multiple smaller GPUs
+- Medium models (7B-13B): 2-4 A100s or QLoRA on single A100
+- Large models (70B+): 8+ A100s, model parallelism
+- Cloud options: Lambda Labs, Vast.ai (cheap GPU rental), RunPod
+- Managed: OpenAI fine-tuning API, Together AI, Fireworks AI
+
+MODEL REGISTRY:
+A model registry is the centralized store for managing model versions, metadata, and lifecycle.
+
+What the registry stores:
+- Model artifact (weights, tokenizer, config)
+- Model version and lineage (which data, which code, which hyperparameters)
+- Evaluation metrics per version
+- Deployment status (staging, production, archived)
+- Model tags and descriptions
+
+Tools:
+- MLflow Model Registry — open source, self-hostable
+- Weights & Biases Artifacts — integrated with W&B experiment tracking
+- Hugging Face Hub — for sharing and versioning transformer models
+- AWS SageMaker Model Registry — managed, AWS-native
+- Simple: store models in S3/GCS with versioned paths and metadata in DB
+
+MODEL STAGING:
+Every model must go through stages before production:
+Experimentation → Staging → Production → Archived
+
+- Staging: model deployed to staging environment, evaluated on real traffic shadow
+- A/B testing: route small % of traffic to new model, compare with current model
+- Canary deployment: gradually increase traffic to new model (1% → 10% → 50% → 100%)
+- Shadow mode: new model runs alongside old model, responses logged but not served
+
+DECISION RULE — TRAINING:
+- "custom ML model needed" → full training pipeline + MLflow
+- "LLM behavior needs to change" → fine-tuning (LoRA recommended)
+- "LLM needs domain knowledge" → RAG (no fine-tuning needed)
+- "limited GPU, small model" → QLoRA fine-tuning
+- "tabular prediction task" → XGBoost or Random Forest first
+- "image/audio/video" → deep learning with PyTorch
+
+
+----------------------------------------------------------------
+SECTION 4: SERVING — MODEL DEPLOYMENT AND INFERENCE
+----------------------------------------------------------------
+
+DEFINITION:
+Model serving is the process of deploying trained models and making them available
+as a service that applications can call to get predictions or generated outputs.
+
+Core principle: Make model predictions accessible, reliable, fast, and scalable via an API.
+
+SERVING PIPELINE OVERVIEW:
+[Trained Model (from registry)]
+       ↓
+[Model Loading and Optimization]
+       ↓
+[Inference Server]
+       ↓
+[API Endpoint] — REST or gRPC
+       ↓
+[Client Application]
+
+MODEL SERVING ARCHITECTURES:
+
+1. Online Serving (Real-time inference):
+   - Model makes predictions on demand, one request at a time
+   - Low latency required (< 200ms typically)
+   - Use when: user is waiting for response (chatbot, recommendations, search)
+   - Pattern: client sends request → inference server processes → returns prediction
+
+2. Batch Serving (Offline inference):
+   - Model makes predictions on large dataset all at once
+   - High throughput, latency not critical
+   - Use when: generating predictions for entire user base overnight
+   - Pattern: schedule batch job → load all data → run inference → store results
+
+3. Streaming Inference:
+   - Model processes continuous stream of events
+   - Use when: real-time event classification, fraud detection, live analytics
+   - Tools: Kafka + Flink, Kafka Streams
+
+INFERENCE SERVERS:
+An inference server hosts the model and handles incoming prediction requests efficiently.
+
+1. vLLM — high-performance LLM inference server:
+   - PagedAttention: manages KV cache efficiently → high GPU utilization
+   - Continuous batching: groups requests dynamically → higher throughput
+   - OpenAI-compatible API: drop-in replacement for OpenAI calls
+   - Best for: production LLM serving at scale (open source models)
+   - Supports: Llama, Mistral, Gemma, Mixtral, many others
+
+2. Ollama — local LLM serving:
+   - Run LLMs locally on Mac/Linux/Windows
+   - Simple CLI and REST API
+   - Best for: development, testing, private data that can't leave device
+   - Supports: Llama3, Mistral, Gemma, Phi, CodeLlama
+
+3. TGI (Text Generation Inference) — Hugging Face:
+   - Production-grade LLM serving
+   - Tensor parallelism for multi-GPU
+   - Best for: Hugging Face model ecosystem
+
+4. Triton Inference Server — NVIDIA:
+   - Supports multiple frameworks (PyTorch, TensorFlow, ONNX)
+   - Best for: traditional ML models + deep learning, not LLMs specifically
+
+5. TorchServe — PyTorch native serving
+6. BentoML — framework-agnostic model serving with packaging
+
+7. Managed APIs (no inference server needed):
+   - OpenAI API, Anthropic API, Google Gemini API
+   - Fully managed, pay per token
+   - Best for: getting started, low volume, no GPU available
+
+MODEL OPTIMIZATION FOR SERVING:
+
+1. Quantization:
+   - Reduce model weight precision (FP32 → FP16 → INT8 → INT4)
+   - Reduces memory footprint and increases inference speed
+   - Small accuracy loss, large efficiency gain
+   - FP16: half precision, standard for GPU inference
+   - INT8: 8-bit quantization (bitsandbytes library)
+   - INT4: 4-bit quantization (GGUF format, llama.cpp)
+   - Use when: need to serve larger model on limited GPU memory
+
+2. Batching:
+   - Process multiple inference requests together in one forward pass
+   - Dramatically increases GPU utilization and throughput
+   - Static batching: wait for N requests before processing
+   - Dynamic batching: process when batch is full OR timeout reached
+   - Continuous batching (vLLM): most efficient for LLMs
+
+3. KV Cache:
+   - Cache key-value attention pairs from prompt prefix
+   - Avoids recomputing attention for repeated prefixes
+   - Critical for LLM efficiency (Anthropic prompt caching)
+
+4. Speculative Decoding:
+   - Small draft model generates candidate tokens
+   - Large model verifies multiple tokens in parallel
+   - Increases effective throughput of large model
+
+5. ONNX Export:
+   - Convert PyTorch/TensorFlow model to ONNX format
+   - ONNX Runtime for optimized cross-platform inference
+   - Hardware-specific optimizations (CPU, GPU, edge devices)
+
+6. Model Distillation:
+   - Train a smaller "student" model to mimic larger "teacher" model
+   - Student model is faster and cheaper to serve
+   - Some quality loss but significant efficiency gain
+
+DEPLOYMENT STRATEGIES FOR MODEL SERVING:
+
+1. Blue-Green Deployment:
+   - Run old model (blue) and new model (green) simultaneously
+   - Switch traffic from blue to green instantly when ready
+   - Easy rollback — switch back to blue if green has issues
+   - Requires double infrastructure cost during transition
+
+2. Canary Deployment:
+   - Route small % of traffic (1-5%) to new model
+   - Monitor quality and latency metrics
+   - Gradually increase traffic if metrics are good
+   - Rollback immediately if metrics degrade
+   - Best practice for model serving updates
+
+3. Shadow Mode:
+   - New model receives all traffic but responses are NOT served to users
+   - New model responses logged and compared to old model
+   - Safe way to evaluate new model on real production traffic
+
+4. A/B Testing:
+   - Split users into groups: group A gets model V1, group B gets model V2
+   - Compare business metrics (click rate, satisfaction, conversion)
+   - Statistical significance required before declaring winner
+
+SERVING INFRASTRUCTURE:
+
+Containerization:
+- Package model + inference server in Docker container
+- Consistent environment across dev, staging, production
+- Docker image includes: model weights, inference server, dependencies
+
+Orchestration:
+- Kubernetes for scaling model serving pods
+- GPU node pools for LLM serving
+- Horizontal Pod Autoscaler based on request queue length or GPU utilization
+
+GPU Considerations:
+- LLM inference requires GPU (CPU is 10-100x slower)
+- VRAM requirements: 7B model ≈ 14GB FP16, 7GB INT8, 4GB INT4
+- Multi-GPU for large models: tensor parallelism across GPUs
+- Cloud GPU options: AWS (A100, H100), GCP (A100, TPU), Azure (A100)
+- On-demand vs Reserved instances for cost optimization
+
+SERVING FOR RAG SYSTEMS:
+RAG serving = embedding model serving + vector search + LLM inference
+- Embedding model: can run on CPU for small models, GPU for large
+- Vector search (Qdrant): CPU-based, horizontally scalable
+- LLM inference: GPU required for open source, API for managed
+- Chain: embed query → search Qdrant → build prompt → call LLM → stream response
+
+DECISION RULE — SERVING:
+- "open source LLM in production" → vLLM serving
+- "local development / private data" → Ollama
+- "managed API, low volume" → OpenAI/Anthropic API
+- "traditional ML model" → BentoML or TorchServe
+- "streaming response to user" → Server-Sent Events (SSE) via FastAPI
+- "high throughput batch predictions" → batch serving with GPU cluster
+- "new model update" → canary deployment always
+
+
+----------------------------------------------------------------
+SECTION 5: MONITORING — DRIFT DETECTION AND FEEDBACK LOOPS
+----------------------------------------------------------------
+
+DEFINITION:
+Model monitoring is the continuous process of tracking model performance, data quality,
+and system health in production to detect degradation, drift, and failures — and
+triggering corrective action (retraining, rollback, alerting) when problems are detected.
+
+Core principle: Models degrade silently in production. Monitoring makes degradation visible
+and triggers automatic or manual corrective action.
+
+WHY MODELS DEGRADE:
+1. Data Drift: the statistical distribution of input data changes over time
+   - Example: user demographics shift, new product categories added
+   - Effect: model receives inputs unlike training data → predictions degrade
+
+2. Concept Drift: the relationship between input features and the target changes
+   - Example: what constitutes "spam" evolves as spammers adapt
+   - Effect: model's learned patterns become invalid
+
+3. Label Drift: the distribution of output labels changes
+   - Example: fraud patterns change, more fraud in new categories
+
+4. Feature Drift: specific feature distributions change
+   - Example: age distribution of users shifts, new device types appear
+
+5. Model Staleness: world changes, model's training data is outdated
+   - Example: news classification model doesn't know about new topics
+
+6. Infrastructure Drift: code/library updates change model behavior
+   - Example: tokenizer update changes text preprocessing
+
+MONITORING LAYERS:
+
+1. SYSTEM MONITORING (Infrastructure):
+   What to monitor:
+   - Latency (P50, P95, P99 response times)
+   - Throughput (requests per second)
+   - Error rate (% of failed requests)
+   - GPU/CPU utilization
+   - Memory usage
+   - Queue depth (if using async serving)
+
+   Tools: Prometheus + Grafana, Datadog, AWS CloudWatch
+   Alerts: latency > threshold, error rate > 1%, GPU memory > 90%
+
+2. DATA MONITORING (Input Quality):
+   What to monitor:
+   - Feature distribution drift vs training distribution
+   - Missing value rates in incoming data
+   - Out-of-range values (values outside training distribution)
+   - Schema violations (unexpected feature types or missing columns)
+   - Input volume anomalies (sudden drop in requests = upstream problem)
+
+   Tools: Evidently AI, WhyLogs, Great Expectations, Fiddler AI
+   Statistical tests for drift: KS test, Chi-square test, PSI (Population Stability Index)
+
+3. MODEL PERFORMANCE MONITORING (Output Quality):
+   What to monitor:
+   - Prediction accuracy (when ground truth is available)
+   - Prediction confidence distribution
+   - Output distribution drift (is model predicting different classes than before?)
+   - Business metrics tied to model (click-through rate, conversion rate)
+
+   Challenge: ground truth often not immediately available in production
+   Solutions:
+   - Delayed labels: collect ground truth later and evaluate retrospectively
+   - Proxy metrics: use business metrics as proxies for model quality
+   - Human evaluation: sample predictions for human review
+
+4. LLM-SPECIFIC MONITORING:
+   What to monitor:
+   - Token usage per request (cost tracking)
+   - Response latency (time to first token, total generation time)
+   - Response length distribution
+   - Refusal rate (% of requests model refused to answer)
+   - Hallucination rate (from automated evaluation)
+   - User satisfaction (thumbs up/down rate)
+   - Retrieval quality (for RAG: precision, recall of retrieved chunks)
+   - Prompt injection attempts
+   - Toxicity / safety violations
+
+   Tools: Langfuse (your stack), LangSmith, Helicone, Arize Phoenix
+
+DRIFT DETECTION METHODS:
+
+1. Statistical Tests:
+   - Kolmogorov-Smirnov (KS) test: detects shift in continuous feature distributions
+   - Chi-square test: detects shift in categorical feature distributions
+   - Population Stability Index (PSI): measures shift magnitude, standard in finance
+     PSI < 0.1: no significant change
+     PSI 0.1-0.2: moderate change, investigate
+     PSI > 0.2: significant drift, action required
+
+2. Moving Window Comparison:
+   - Compare recent window (last 7 days) vs reference window (training data)
+   - Compute distribution distance metrics
+   - Alert when distance exceeds threshold
+
+3. Model-Based Drift Detection:
+   - Train a classifier to distinguish training data from production data
+   - If classifier can distinguish them (AUC > 0.7), data has drifted
+
+4. CUSUM (Cumulative Sum) and ADWIN:
+   - Online drift detection algorithms
+   - Detect change points in streaming data
+   - Use when: real-time drift detection is required
+
+FEEDBACK LOOPS:
+
+A feedback loop is a system where production outcomes are captured, evaluated, and
+fed back into the ML pipeline to improve the model over time.
+
+Types of feedback loops:
+
+1. Explicit Feedback:
+   - User directly provides feedback (thumbs up/down, star rating, correction)
+   - High quality signal, low volume
+   - Implementation: feedback button in UI → store in DB → use for evaluation/retraining
+   - Examples: ChatGPT thumbs up/down, Grammarly suggestion accept/reject
+
+2. Implicit Feedback:
+   - Infer feedback from user behavior without explicit action
+   - Higher volume, noisier signal
+   - Examples:
+     - Did user click on recommendation? (click = positive, ignore = negative)
+     - Did user re-ask the same question? (yes = negative feedback on previous answer)
+     - Time spent on content (longer = more relevant)
+     - Did user copy the generated text? (yes = positive)
+
+3. Business Metric Feedback:
+   - Connect model predictions to downstream business outcomes
+   - Examples:
+     - Model recommended product → user purchased → positive feedback
+     - Fraud detection flagged transaction → fraud confirmed → positive feedback
+     - Content moderation removed post → appeal successful → false positive
+
+4. Ground Truth Feedback:
+   - Actual correct labels collected after prediction
+   - Examples:
+     - Model predicted loan default → loan actually defaulted or not (weeks later)
+     - Medical diagnosis prediction → actual diagnosis confirmed by doctor
+
+AUTOMATED RETRAINING TRIGGERS:
+Retraining should be triggered automatically when:
+- Model accuracy drops below threshold (e.g., F1 < 0.85)
+- Data drift detected (PSI > 0.2 for key features)
+- Time-based schedule (weekly or monthly retrain to stay fresh)
+- New labeled data volume exceeds threshold (e.g., 10,000 new labeled samples)
+
+Retraining pipeline:
+[Trigger condition met]
+       ↓
+[Pull latest training data (with new labeled samples)]
+       ↓
+[Retrain model (or fine-tune from current model)]
+       ↓
+[Automated evaluation on held-out test set]
+       ↓
+[Compare new model vs current production model]
+       ↓
+[If new model better → promote to staging → canary deploy]
+[If not better → alert team → manual investigation]
+
+MONITORING FOR RAG SYSTEMS:
+- Retrieval quality over time: are the right chunks being retrieved?
+- Knowledge base freshness: are documents being reingested when they change?
+- Vector DB health: index size, query latency, memory usage
+- Embedding model consistency: alert if embedding model version changes
+- Query volume trends: detect sudden changes in user query patterns
+- Answer quality: periodic human evaluation or LLM-as-judge on sampled responses
+
+LLM FEEDBACK LOOP IMPLEMENTATION:
+1. Log every LLM request and response (Langfuse)
+2. Attach user feedback (thumbs up/down) to the trace in Langfuse
+3. Langfuse Score API: langfuse.score(trace_id=..., name="user_feedback", value=1 or 0)
+4. Export low-score traces for human review
+5. High-quality corrections become fine-tuning dataset
+6. Fine-tune model → evaluate → canary deploy
+
+MONITORING INFRASTRUCTURE:
+- Metrics collection: Prometheus (pull-based metrics scraping)
+- Visualization: Grafana (dashboards for all metrics)
+- Alerting: PagerDuty, Opsgenie, Slack webhooks
+- Log aggregation: ELK Stack (Elasticsearch, Logstash, Kibana) or Loki + Grafana
+- ML monitoring: Evidently AI, Arize, Fiddler, Langfuse (for LLMs)
+- Distributed tracing: Jaeger, Zipkin, OpenTelemetry
+
+
+----------------------------------------------------------------
+SECTION 6: COMPLETE MLOPS PIPELINE ARCHITECTURE
+----------------------------------------------------------------
+
+End-to-end MLOps pipeline for a production AI system:
+
+DATA LAYER:
+[Raw Data Sources (DBs, APIs, Files, Events)]
+       ↓
+[Ingestion Pipeline (Airflow / Celery)]
+  ├── Data validation (Great Expectations / Pydantic)
+  ├── Data cleaning and preprocessing
+  ├── Feature engineering
+  └── Data versioning (DVC / Delta Lake)
+       ↓
+[Data Storage]
+  ├── Feature Store (Feast / Redis + PostgreSQL)
+  ├── Training Dataset Store (S3 / GCS)
+  └── Vector Store (Qdrant) — for RAG systems
+
+TRAINING LAYER:
+[Experiment Tracking (MLflow / W&B)]
+       ↓
+[Training Pipeline]
+  ├── Model training / fine-tuning (PyTorch / HuggingFace)
+  ├── Hyperparameter tuning (Optuna)
+  ├── Evaluation (metrics computation)
+  └── Model registration (MLflow Registry)
+       ↓
+[Model Registry (MLflow / HuggingFace Hub)]
+
+CI/CD FOR ML:
+[Code change / New data / Scheduled trigger]
+       ↓
+[CI Pipeline]
+  ├── Unit tests (data validation, model tests)
+  ├── Integration tests (pipeline tests)
+  └── Model evaluation tests (performance threshold)
+       ↓
+[CD Pipeline]
+  ├── Build Docker image with model
+  ├── Deploy to staging (shadow mode evaluation)
+  └── Canary deploy to production
+
+SERVING LAYER:
+[Model Serving (vLLM / Ollama / FastAPI)]
+  ├── Online inference endpoint
+  ├── Batch inference pipeline
+  └── Streaming inference (SSE)
+       ↓
+[API Gateway] — rate limiting, auth, routing
+       ↓
+[Client Applications]
+
+MONITORING LAYER:
+[Prometheus + Grafana] — system metrics
+[Evidently AI] — data drift detection
+[Langfuse] — LLM tracing, cost, quality
+[Feedback Collection] — user ratings, implicit signals
+       ↓
+[Alerting] — Slack / PagerDuty when thresholds breached
+       ↓
+[Automated Retraining Trigger] — when drift or quality threshold exceeded
+
+
+----------------------------------------------------------------
+SECTION 7: MLOPS TOOLS REFERENCE
+----------------------------------------------------------------
+
+Category            | Tools
+--------------------|--------------------------------------------------
+Orchestration       | Apache Airflow, Prefect, Dagster, Celery
+Experiment Tracking | MLflow, Weights & Biases, Neptune, Comet ML
+Data Validation     | Great Expectations, Pandera, Pydantic, dbt
+Data Versioning     | DVC, Delta Lake, LakeFS
+Feature Store       | Feast, Tecton, Hopsworks
+Model Registry      | MLflow Registry, HuggingFace Hub, W&B Artifacts
+Model Serving       | vLLM, Ollama, BentoML, TorchServe, Triton
+LLM Fine-tuning     | HuggingFace PEFT, Axolotl, LLaMA-Factory
+Monitoring (ML)     | Evidently AI, Arize, Fiddler, WhyLogs
+Monitoring (LLM)    | Langfuse, LangSmith, Helicone, Arize Phoenix
+Infrastructure      | Docker, Kubernetes, Prometheus, Grafana
+GPU Cloud           | Lambda Labs, Vast.ai, RunPod, Together AI
+
+
+----------------------------------------------------------------
+SECTION 8: QUESTIONS THE AGENT MUST ASK vs INFER
+----------------------------------------------------------------
+
+INFER FROM PROJECT (do not ask):
+- "custom ML model" → full MLOps pipeline (ingestion + training + serving + monitoring)
+- "LLM-powered app with API" → serving + monitoring (Langfuse) only
+- "RAG system" → ingestion pipeline + serving + LLM monitoring
+- "fine-tuning needed" → training phase + LoRA if GPU constrained
+- "production system" → monitoring mandatory (Prometheus + Langfuse)
+- "retraining needed" → automated retraining pipeline with drift detection
+- "data from multiple sources" → ingestion orchestration (Airflow or Celery)
+- "open source LLM self-hosted" → vLLM serving + GPU infrastructure
+- "feedback from users" → feedback loop design + Langfuse scoring
+
+ALWAYS ASK:
+1. Do you need a custom trained model or will a pre-trained LLM API suffice?
+   → Determines if training phase is needed or just serving + monitoring
+2. Is data privacy a concern? Can data leave your infrastructure?
+   → Determines if self-hosted model (Ollama/vLLM) is required
+3. What is the expected request volume?
+   → Determines serving infrastructure scale
+
+NEVER ASK:
+- Whether to add monitoring → always mandatory for production
+- Whether to track experiments → always use MLflow or W&B during training
+- Whether to version data → always use DVC or timestamp-based versioning
+- Whether to use canary deployment → always for model updates in production
+
+
+----------------------------------------------------------------
+END OF MLOPS / AI LIFECYCLE DESIGN SOURCE MATERIAL
+================================================================

@@ -1,0 +1,286 @@
+================================================================
+DESIGN STRATEGIES — FULL KNOWLEDGE SOURCE MATERIAL
+================================================================
+Category: Design Strategies
+Sub-categories: Top-Down, Bottom-Up, Modular
+Purpose: Source material for RAG vector DB — Plan & Architect Agent
+================================================================
+
+
+----------------------------------------------------------------
+SECTION 1: WHAT ARE DESIGN STRATEGIES
+----------------------------------------------------------------
+
+A design strategy is the approach or methodology used to plan and structure a software system before and during development. It defines the ORDER and DIRECTION in which a system is broken down and built.
+
+Design strategies are not the same as architecture patterns. Architecture patterns define the STRUCTURE of the system (what it looks like). Design strategies define the PROCESS of designing that structure (how you think about it).
+
+Three primary design strategies exist:
+1. Top-Down Design
+2. Bottom-Up Design
+3. Modular Design
+
+In real projects, these strategies are often combined. Understanding which strategy to lead with determines how effectively the team can plan, divide work, and deliver.
+
+DECISION RULE:
+- Most enterprise and AI projects → start Top-Down, implement Bottom-Up
+- Library or SDK development → Bottom-Up
+- Large team with parallel workstreams → Modular
+- Solo developer building MVP → Modular with Bottom-Up execution
+
+
+----------------------------------------------------------------
+SECTION 2: TOP-DOWN DESIGN
+----------------------------------------------------------------
+
+DEFINITION:
+Top-Down design starts with the complete system as a whole and progressively breaks it down into smaller sub-systems, components, and modules. You define the big picture first, then drill into details.
+
+The process:
+1. Define the overall system goal
+2. Identify major sub-systems
+3. Break each sub-system into components
+4. Break components into functions/modules
+5. Define data flow between all parts
+6. Then implement
+
+ANALOGY:
+Think of building a city. You first decide the city layout (zones: residential, commercial, industrial), then plan roads between zones, then design individual buildings, then furnish rooms inside buildings. You always start from the largest unit.
+
+WHO USES IT:
+- Architects and tech leads during HLD phase
+- Teams designing enterprise systems
+- Teams doing system design interviews
+
+ADVANTAGES:
+- Forces clarity on overall system before writing any code
+- Makes dependencies and interfaces visible early
+- Easier to communicate with stakeholders (they see the big picture)
+- Reduces risk of building the wrong thing
+- Enables parallel team assignments once components are defined
+
+DISADVANTAGES:
+- Risk of over-engineering early (designing things that may not be needed)
+- Can be slow to start implementation — team waits for full design
+- Details at lower levels may reveal flaws in the top-level design
+- Requires experienced architects to do it well
+
+WHEN TO USE TOP-DOWN:
+- Building a new system from scratch with unknown scope
+- Large team (5+ developers) that needs clear division of responsibilities
+- Project has complex integrations between many services
+- Stakeholders need architecture sign-off before development
+- AI/agentic systems where agent boundaries must be clear before implementation
+- Regulated domains (fintech, healthcare) where architecture must be reviewed
+
+WHEN NOT TO USE TOP-DOWN ALONE:
+- Experimental projects where requirements are unclear
+- Startups iterating fast on product-market fit
+- When the team needs to prove a concept before designing the full system
+
+DECISION RULE — INFER FROM PROJECT:
+- "enterprise resource planning" → Top-Down mandatory
+- "AI agent system with 5 agents" → Top-Down to define agent boundaries first
+- "hospital management system" → Top-Down for compliance and clarity
+- "startup MVP in 2 weeks" → Top-Down too heavy, prefer Modular + Bottom-Up
+
+
+----------------------------------------------------------------
+SECTION 3: BOTTOM-UP DESIGN
+----------------------------------------------------------------
+
+DEFINITION:
+Bottom-Up design starts with the smallest, most fundamental components and builds upward by composing them into larger systems. You build and validate individual pieces first, then integrate them.
+
+The process:
+1. Identify core low-level components needed
+2. Build and test each component independently
+3. Compose components into larger modules
+4. Integrate modules into sub-systems
+5. Assemble sub-systems into the full system
+
+ANALOGY:
+Think of building with LEGO. You first create individual LEGO pieces (bricks), test that each brick snaps correctly, then build small structures from bricks, then combine structures into a full model. You never see the final model until all pieces are assembled.
+
+WHO USES IT:
+- Developers during implementation phase
+- Library and framework authors
+- Teams working on microservices where each service is built independently
+- Data engineers building ETL pipelines component by component
+
+ADVANTAGES:
+- Each component is tested and validated before integration
+- Promotes reusability — components built independently can be reused elsewhere
+- Works well with TDD (Test-Driven Development)
+- Team can work in parallel on different components
+- Easier to debug — issues isolated to individual components
+
+DISADVANTAGES:
+- Risk of building components that don't integrate well later
+- Without a top-level vision, components may not align with overall goals
+- Integration issues discovered late in the process
+- Can lead to inconsistent interfaces between components if not coordinated
+
+WHEN TO USE BOTTOM-UP:
+- Building shared libraries, SDKs, or utility packages
+- Microservices where each service is independently deployable
+- Data pipelines where each transformation step is a standalone unit
+- Proof of concept — validate a single component before designing the full system
+- Refactoring legacy code — rewrite components one at a time
+
+WHEN NOT TO USE BOTTOM-UP ALONE:
+- When the overall system architecture is unclear
+- When multiple teams need to integrate their work — interfaces must be agreed upfront
+- When stakeholders need visibility into overall system design
+
+COMBINATION RULE (most common in practice):
+Top-Down for PLANNING + Bottom-Up for IMPLEMENTATION
+→ Design the full system top-down (HLD)
+→ Build component by component bottom-up (LLD + implementation)
+→ This is the standard approach for most production systems
+
+DECISION RULE — INFER FROM PROJECT:
+- "build a reusable authentication library" → Bottom-Up
+- "build individual microservices" → Bottom-Up per service
+- "validate RAG retrieval before full agent" → Bottom-Up (prove retrieval works first)
+- "full product with multiple teams" → Top-Down plan, Bottom-Up execution
+
+
+----------------------------------------------------------------
+SECTION 4: MODULAR DESIGN
+----------------------------------------------------------------
+
+DEFINITION:
+Modular design structures the system as a collection of independent, self-contained, reusable modules. Each module has a clearly defined responsibility, a well-defined interface, and can be developed, tested, and deployed independently.
+
+Core principle: HIGH COHESION within a module, LOW COUPLING between modules.
+- High cohesion → everything inside a module is related to one responsibility
+- Low coupling → modules depend on each other as little as possible
+
+The process:
+1. Identify distinct functional areas of the system
+2. Define each area as an independent module with clear boundaries
+3. Define the interface (API contract) each module exposes
+4. Develop each module independently
+5. Integrate modules through their interfaces
+
+ANALOGY:
+Think of a smartphone. The camera module, battery module, speaker module, and display module are all independent. The camera can be upgraded without touching the battery. Each module communicates through defined interfaces (connectors). This is modular design.
+
+WHO USES IT:
+- All modern software teams — modular design is the default in professional software
+- Especially important in microservices, plugin architectures, and large codebases
+- Frontend teams (component-based UI in React, Vue)
+- Backend teams (service modules, domain modules)
+
+KEY PROPERTIES OF A GOOD MODULE:
+1. Single Responsibility — one module does one thing well
+2. Well-defined interface — input/output contract is clear and stable
+3. Encapsulation — internal implementation hidden from outside
+4. Replaceability — can swap one module for another without breaking the system
+5. Testability — can be unit tested independently
+
+ADVANTAGES:
+- Parallel development — different teams build different modules simultaneously
+- Easier maintenance — fix one module without affecting others
+- Reusability — modules can be reused across projects
+- Scalability — scale only the modules under load, not the entire system
+- Onboarding — new developers can understand and own individual modules
+
+DISADVANTAGES:
+- Requires upfront interface design — changing interfaces later is costly
+- Over-modularization can add unnecessary complexity for small projects
+- Inter-module communication overhead (especially in distributed systems)
+- Requires discipline to maintain boundaries — teams tend to create shortcuts
+
+WHEN TO USE MODULAR DESIGN:
+- Any project with more than 2 developers
+- Projects expected to grow over time
+- Systems where different parts have different deployment/scaling needs
+- Codebases that will be maintained for more than 6 months
+- AI systems where each agent, tool, or pipeline stage is a distinct module
+
+WHEN MODULAR DESIGN IS OVERKILL:
+- Hackathon projects (24-48 hours)
+- Throwaway scripts or one-time data processing jobs
+- Truly simple CRUD apps with 2-3 tables and 1 developer
+
+MODULAR DESIGN IN AI SYSTEMS (specific to agentic/RAG projects):
+Each of these should be a separate module:
+- Ingestion module — document loading, chunking, embedding, storing
+- Retrieval module — query embedding, similarity search, reranking
+- LLM inference module — prompt construction, API call, response parsing
+- Agent orchestration module — routing, tool calling, memory management
+- Observability module — tracing, logging, token tracking (Langfuse)
+- API module — FastAPI routes, request validation, response formatting
+
+DECISION RULE — INFER FROM PROJECT:
+- Any project with 3+ features → apply modular design
+- "AI agent with tools" → each tool is a module, orchestrator is a module
+- "RAG pipeline" → ingestion, retrieval, generation are 3 separate modules
+- "microservices" → each service is inherently a module
+
+
+----------------------------------------------------------------
+SECTION 5: COMBINING ALL THREE STRATEGIES
+----------------------------------------------------------------
+
+In professional system design, all three strategies are used together:
+
+PHASE 1 — PLANNING (Top-Down):
+→ Define overall system, break into major components, assign responsibilities
+
+PHASE 2 — STRUCTURING (Modular):
+→ Define each component as an independent module with clear interfaces
+
+PHASE 3 — IMPLEMENTATION (Bottom-Up):
+→ Build and test each module independently, then integrate
+
+EXAMPLE — Food Delivery App:
+Top-Down:
+  System → User App + Restaurant App + Delivery App + Admin + Backend Services
+
+Modular:
+  Backend Services → Auth Module + Order Module + Payment Module + Notification Module + Tracking Module
+
+Bottom-Up:
+  Build Auth Module first (login, JWT) → Build Order Module → Build Payment Module → Integrate → Test full flow
+
+
+EXAMPLE — AI Agent System (Plan & Architect Agent):
+Top-Down:
+  Agent System → Plan Agent + Schema Agent + Code Agent + Fix Agent + Auth Agent
+
+Modular:
+  Plan Agent → Retriever Module + Prompt Builder Module + LLM Caller Module + Output Parser Module
+
+Bottom-Up:
+  Build Retriever → Test retrieval quality → Build Prompt Builder → Test prompts → Integrate → Test full agent
+
+
+----------------------------------------------------------------
+SECTION 6: QUESTIONS THE AGENT MUST ASK vs INFER
+----------------------------------------------------------------
+
+INFER FROM PROJECT TOPIC:
+- Large system with multiple services → Top-Down planning + Modular structure
+- Library or utility → Bottom-Up
+- AI/agentic project → Modular (each agent/tool is a module) + Top-Down planning
+- Solo MVP → Modular (lightweight) + Bottom-Up execution
+
+ALWAYS ASK:
+1. Team size?
+   → Solo → Bottom-Up + lightweight modular
+   → 3+ developers → Top-Down plan + Modular structure mandatory
+2. Is this greenfield (new) or refactoring existing code?
+   → Greenfield → Top-Down first
+   → Refactoring → Bottom-Up component by component
+
+NEVER ASK:
+- Which strategy to use → agent decides based on project type and team size
+- Whether to use modular design → always yes for any non-trivial project
+
+
+----------------------------------------------------------------
+END OF DESIGN STRATEGIES SOURCE MATERIAL
+================================================================

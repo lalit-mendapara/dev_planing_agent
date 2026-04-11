@@ -15,7 +15,7 @@ from planagent.ui import (
 from rich.panel import Panel
 from rich.markdown import Markdown
 
-app = typer.Typer(help="Plan & Architect Agent — 10x faster project planning.")
+app = typer.Typer(help="Plan & Architect Agent — faster project planning.")
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ def plan(path: str = typer.Argument(".", help="path to your project folder")):
     # Pre-populate state from scan (tech stack, user types, gaps)
     state = prefill_state_from_scan(state)
 
-    # Phase 1: Conversation (sliding window + incremental extraction)
+    # Phase 1: Conversation (memory-based + incremental extraction)
     state = run_conversation(state)
     if not state["conversation_complete"]:
         console.print("[yellow]Session ended before completion.[/yellow]")

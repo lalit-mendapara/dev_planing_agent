@@ -1492,9 +1492,13 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
     """
     # feature_name → set of evidence strings
     evidence_map: dict[str, set[str]] = {}
+    # feature_name → list of structured location dicts
+    location_map: dict[str, list[dict]] = {}
 
-    def _add(feature: str, source: str):
+    def _add(feature: str, source: str, location: dict | None = None):
         evidence_map.setdefault(feature, set()).add(source)
+        if location:
+            location_map.setdefault(feature, []).append(location)
 
     # --- 1. Route/endpoint analysis ---
     for rel, info in files_info.items():
@@ -1509,7 +1513,14 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
             route_lower = route_str.lower()
             for pattern, feature in _FEATURE_ROUTE_SIGNALS.items():
                 if pattern in route_lower:
-                    _add(feature, f"route: {route_str[:80]}")
+                    loc = {"type": "route", "file": rel, "path": route_str[:80]}
+                    fn_name = route.get("function", "") if isinstance(route, dict) else ""
+                    line = route.get("line", 0) if isinstance(route, dict) else 0
+                    if fn_name:
+                        loc["function"] = fn_name
+                    if line:
+                        loc["line"] = line
+                    _add(feature, f"route: {route_str[:80]}", loc)
                     break
 
     # --- 2. Folder/module names ---
@@ -1522,7 +1533,8 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
                 seen_folders.add(lower)
                 if lower in _FEATURE_FOLDER_SIGNALS:
                     _add(_FEATURE_FOLDER_SIGNALS[lower],
-                         f"folder: {part}/")
+                         f"folder: {part}/",
+                         {"type": "folder", "path": part + "/"})
 
     # --- 3. Import-based feature detection ---
     all_imports: set[str] = set()
@@ -1541,7 +1553,8 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
 
     for signal, feature in _FEATURE_IMPORT_SIGNALS.items():
         if signal.lower() in all_imports:
-            _add(feature, f"import: {signal}")
+            _add(feature, f"import: {signal}",
+                 {"type": "import", "package": signal})
 
     # --- 4. Environment variable signals ---
     env_keys = index.get("env_keys", [])
@@ -1549,7 +1562,8 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
         key_upper = key.upper()
         for pattern, feature in _FEATURE_ENV_SIGNALS.items():
             if pattern in key_upper:
-                _add(feature, f"env: {key}")
+                _add(feature, f"env: {key}",
+                     {"type": "env", "key": key})
                 break
 
     # --- 5. Function/class name pattern matching ---
@@ -1561,7 +1575,11 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
             fname_lower = fname.lower()
             for pattern, feature in _FEATURE_NAME_PATTERNS:
                 if re.search(pattern, fname_lower):
-                    _add(feature, f"function: {fname} in {rel}")
+                    loc = {"type": "function", "file": rel, "name": fname}
+                    fn_line = fn.get("line", 0) if isinstance(fn, dict) else 0
+                    if fn_line:
+                        loc["line"] = fn_line
+                    _add(feature, f"function: {fname} in {rel}", loc)
                     break
 
         # Check class names
@@ -1617,7 +1635,12 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
                     }
                     for model_key, feature in _MODEL_FEATURES.items():
                         if model_name == model_key or model_name.endswith(model_key):
-                            _add(feature, f"model: {cname} in {rel}")
+                            loc = {"type": "model", "file": rel, "name": cname,
+                                   "line": cls.get("line", 0)}
+                            fields = [f.get("name", "") for f in cls.get("model_fields", [])[:8]]
+                            if fields:
+                                loc["fields"] = fields
+                            _add(feature, f"model: {cname} in {rel}", loc)
                             break
 
                 # Enum-based feature hints
@@ -1629,16 +1652,22 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
                         if any(m in members_lower for m in
                                ("active", "inactive", "suspended", "banned")):
                             _add("Account Status Management",
-                                 f"enum: {cname} in {rel}")
+                                 f"enum: {cname} in {rel}",
+                                 {"type": "enum", "file": rel, "name": cname,
+                                  "line": cls.get("line", 0)})
                         if any(m in members_lower for m in
                                ("pending", "processing", "completed",
                                 "cancelled", "refunded")):
                             _add("Order/Workflow Management",
-                                 f"enum: {cname} in {rel}")
+                                 f"enum: {cname} in {rel}",
+                                 {"type": "enum", "file": rel, "name": cname,
+                                  "line": cls.get("line", 0)})
                         if any(m in members_lower for m in
                                ("admin", "moderator", "user", "editor")):
                             _add("Role-Based Access Control",
-                                 f"enum: {cname} in {rel}")
+                                 f"enum: {cname} in {rel}",
+                                 {"type": "enum", "file": rel, "name": cname,
+                                  "line": cls.get("line", 0)})
 
     # --- 6. Decorator-based features ---
     for rel, info in files_info.items():
@@ -1649,23 +1678,30 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
                                              "permission", "jwt_required",
                                              "protected")):
                 _add("Authentication & Authorization",
-                     f"decorator: {dec}")
+                     f"decorator: {dec}",
+                     {"type": "decorator", "file": rel, "name": dec})
             if any(k in dec_lower for k in ("rate_limit", "throttle",
                                              "ratelimit")):
-                _add("Rate Limiting", f"decorator: {dec}")
+                _add("Rate Limiting", f"decorator: {dec}",
+                     {"type": "decorator", "file": rel, "name": dec})
             if any(k in dec_lower for k in ("cache", "cached",
                                              "memoize")):
-                _add("Caching", f"decorator: {dec}")
+                _add("Caching", f"decorator: {dec}",
+                     {"type": "decorator", "file": rel, "name": dec})
             if any(k in dec_lower for k in ("celery", "task",
                                              "shared_task", "job")):
-                _add("Background Tasks", f"decorator: {dec}")
+                _add("Background Tasks", f"decorator: {dec}",
+                     {"type": "decorator", "file": rel, "name": dec})
             if any(k in dec_lower for k in ("schedule", "periodic",
                                              "crontab")):
-                _add("Task Scheduling", f"decorator: {dec}")
+                _add("Task Scheduling", f"decorator: {dec}",
+                     {"type": "decorator", "file": rel, "name": dec})
             if any(k in dec_lower for k in ("validate", "validator")):
-                _add("Input Validation", f"decorator: {dec}")
+                _add("Input Validation", f"decorator: {dec}",
+                     {"type": "decorator", "file": rel, "name": dec})
             if any(k in dec_lower for k in ("middleware",)):
-                _add("Middleware Layer", f"decorator: {dec}")
+                _add("Middleware Layer", f"decorator: {dec}",
+                     {"type": "decorator", "file": rel, "name": dec})
 
     # --- 7. README-based feature hints ---
     readme = index.get("readme", "")
@@ -1709,12 +1745,17 @@ def _discover_features(root: Path, files_info: dict, index: dict) -> list[dict]:
             confidence = "medium"
         else:
             confidence = "low"
-        features.append({
+        feature_entry = {
             "name": name,
             "confidence": confidence,
             "evidence_count": count,
             "evidence": sorted(evidences)[:5],  # cap evidence list
-        })
+        }
+        # Attach structured locations (file paths, lines, function names, etc.)
+        locs = location_map.get(name, [])
+        if locs:
+            feature_entry["locations"] = locs[:10]  # cap at 10 locations
+        features.append(feature_entry)
 
     # Sort: high confidence first, then by evidence count
     _CONF_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -1969,6 +2010,40 @@ def _build_summary(root: Path, index: dict) -> dict:
     return summary
 
 
+def _format_feature_locations_compact(feature: dict) -> str:
+    """Build a compact one-line location hint for a discovered feature.
+    Used in tier1 summary so the LLM knows WHERE each feature is implemented."""
+    locations = feature.get("locations", [])
+    if not locations:
+        return ""
+    hints = []
+    for loc in locations[:3]:
+        loc_type = loc.get("type", "")
+        if loc_type == "route":
+            file = loc.get("file", "")
+            fn = loc.get("function", "")
+            path = loc.get("path", "")
+            if file and fn:
+                hints.append(f"{file}::{fn}({path})")
+            elif file:
+                hints.append(f"{file}[{path}]")
+            elif path:
+                hints.append(path)
+        elif loc_type == "model":
+            file = loc.get("file", "")
+            name = loc.get("name", "")
+            hints.append(f"{file}::{name}" if file else name)
+        elif loc_type == "function":
+            file = loc.get("file", "")
+            name = loc.get("name", "")
+            hints.append(f"{file}::{name}()" if file else f"{name}()")
+        elif loc_type == "folder":
+            hints.append(loc.get("path", ""))
+        elif loc_type == "import":
+            hints.append(loc.get("package", ""))
+    return ", ".join(hints) if hints else ""
+
+
 def _build_tier1_summary(summary: dict, index: dict) -> str:
     """Level 1 summary: dense natural-language (~400-800 tokens).
     This is what goes into the system prompt every turn.
@@ -2139,7 +2214,7 @@ def _build_tier1_summary(summary: dict, index: dict) -> str:
         if tested_modules:
             parts.append(f"Tested modules: {', '.join(tested_modules[:10])}")
 
-    # --- Discovered features ---
+    # --- Discovered features (with locations for existing-feature awareness) ---
     features = summary.get("discovered_features", [])
     if features:
         parts.append("--- DISCOVERED APPLICATION FEATURES ---")
@@ -2147,9 +2222,21 @@ def _build_tier1_summary(summary: dict, index: dict) -> str:
         med = [f for f in features if f["confidence"] == "medium"]
         low = [f for f in features if f["confidence"] == "low"]
         if high:
-            parts.append(f"Confirmed features: {', '.join(f['name'] for f in high)}")
+            parts.append("Confirmed features (ALREADY IMPLEMENTED):")
+            for f in high:
+                loc_hint = _format_feature_locations_compact(f)
+                if loc_hint:
+                    parts.append(f"  - {f['name']} -> {loc_hint}")
+                else:
+                    parts.append(f"  - {f['name']}")
         if med:
-            parts.append(f"Likely features: {', '.join(f['name'] for f in med)}")
+            parts.append("Likely features (ALREADY IMPLEMENTED):")
+            for f in med:
+                loc_hint = _format_feature_locations_compact(f)
+                if loc_hint:
+                    parts.append(f"  - {f['name']} -> {loc_hint}")
+                else:
+                    parts.append(f"  - {f['name']}")
         if low:
             parts.append(f"Possible features: {', '.join(f['name'] for f in low[:10])}")
         parts.append("--- END DISCOVERED FEATURES ---")

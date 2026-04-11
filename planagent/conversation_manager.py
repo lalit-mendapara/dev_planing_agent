@@ -10,8 +10,15 @@ from planagent.ui import (
     stream_to_panel,
     get_user_choice,
     get_user_input,
+    render_turn_saved,
+    render_go_back,
+    render_go_back_unavailable,
+    strip_code_blocks,
+    BACK_COMMAND,
 )
 from planagent.guardrails.guard import check_input, check_output
+from planagent.knowledge.memory import ConversationMemory
+from planagent.conversation_store import ConversationStore
 
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "system_prompt.txt"
 DONE_SIGNAL = "CONVERSATION_COMPLETE"
@@ -140,9 +147,13 @@ def prefill_state_from_scan(state: dict) -> dict:
     return state
 
 # ---------------------------------------------------------------------------
-# Sliding window config
+# Conversation context config
 # ---------------------------------------------------------------------------
-WINDOW_SIZE = 6   # keep last N turn-pairs in full; older turns get summarized
+# Token optimization: during conversation we send ONLY the last agent message
+# as history (not a window).  Full conversation is saved to ConversationStore
+# (temp JSONL file) and loaded at plan-generation time for complete context.
+WINDOW_SIZE = 4   # legacy — kept for _apply_memory_window compat
+MINIMAL_CONTEXT = True  # when True, send only last exchange to LLM
 
 
 # ---------------------------------------------------------------------------
@@ -201,42 +212,43 @@ def _build_context(state: dict) -> str:
         if signals:
             lines.append(f"\n--- Scan Flags ---\n" + "\n".join(f"⚠ {s}" for s in signals))
 
-    # Only show fields that are already collected (avoid repeating questions)
+    # RAG: inject knowledge chunks (architecture guidance from source material)
+    # These chunks are actively used by the LLM to shape questions and recommendations
+    rag_chunks = state.get("rag_context", [])
+    if rag_chunks:
+        from planagent.knowledge.retriever import format_chunks_for_prompt
+        rag_text = format_chunks_for_prompt(rag_chunks, max_chars=1500)
+        if rag_text:
+            lines.append(f"\n--- Architecture Knowledge (USE ACTIVELY to shape questions & recommendations) ---\n{rag_text}")
+
+    # Concise state dump — shows what's known, does NOT imply what's missing
+    # (avoids driving the LLM into mechanical field-by-field questioning)
+    state_parts = []
     if state.get("project_goal"):
-        lines.append(f"Project Goal: {state['project_goal']}")
+        state_parts.append(f"Goal: {state['project_goal']}")
     if state.get("user_types"):
-        lines.append(f"User types: {', '.join(state['user_types'])}")
+        state_parts.append(f"Users: {', '.join(state['user_types'])}")
     if state.get("tech_stack"):
         ts = state["tech_stack"]
         if isinstance(ts, dict):
-            lines.append(f"Stack confirmed: {json.dumps(ts)}")
+            compact = {k: v for k, v in ts.items() if v and v != "unknown"}
+            state_parts.append(f"Stack: {json.dumps(compact)}")
         else:
-            lines.append(f"Stack confirmed: {ts}")
+            state_parts.append(f"Stack: {ts}")
     if state.get("features_v1"):
-        lines.append(f"V1 features: {', '.join(state['features_v1'])}")
+        state_parts.append(f"V1: {', '.join(state['features_v1'])}")
     if state.get("features_v2"):
-        lines.append(f"V2 features: {', '.join(state['features_v2'])}")
+        state_parts.append(f"V2: {', '.join(state['features_v2'])}")
     if state.get("constraints"):
-        lines.append(f"Constraints: {', '.join(state['constraints'])}")
+        state_parts.append(f"Constraints: {', '.join(state['constraints'])}")
     if state.get("gaps_flagged"):
-        lines.append(f"Gaps flagged: {', '.join(state['gaps_flagged'])}")
+        state_parts.append(f"Gaps flagged: {', '.join(state['gaps_flagged'])}")
     if state.get("gaps_confirmed"):
-        lines.append(f"Gaps confirmed: {', '.join(state['gaps_confirmed'])}")
+        state_parts.append(f"Gaps included: {', '.join(state['gaps_confirmed'])}")
     if state.get("gaps_deferred"):
-        lines.append(f"Gaps deferred: {', '.join(state['gaps_deferred'])}")
-
-    # Show collection progress (informational, not prescriptive)
-    collected = []
-    for field, label in [
-        ("project_goal", "project goal"),
-        ("user_types", "user types"),
-        ("features_v1", "v1 features"),
-        ("tech_stack", "tech stack"),
-        ("constraints", "constraints"),
-    ]:
-        if state.get(field):
-            collected.append(label)
-    lines.append(f"\nAlready collected: {', '.join(collected) if collected else 'nothing yet'}")
+        state_parts.append(f"Gaps deferred: {', '.join(state['gaps_deferred'])}")
+    if state_parts:
+        lines.append(f"\n--- Collected State ---\n" + "\n".join(state_parts))
     return "\n".join(lines)
 
 
@@ -245,27 +257,30 @@ def _build_context(state: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _build_system_prompt(state: dict) -> str:
-    """Load system prompt and trim sections for already-collected fields."""
+    """Load system prompt, inject context, and add turn-awareness hint."""
     raw = SYSTEM_PROMPT_PATH.read_text()
     context = _build_context(state)
     prompt = raw.replace("{context}", context)
 
-    # Trim topic items that are already collected to save tokens
-    if state.get("project_goal"):
-        prompt = prompt.replace(
-            "- Project goal — what are they building / adding / changing\n", "")
-    if state.get("features_v1"):
-        prompt = prompt.replace(
-            "- V1 features — the core modules for first launch\n", "")
-    if state.get("tech_stack"):
-        prompt = prompt.replace(
-            "- Database choice — if not already detected by scan\n", "")
-    if state.get("constraints"):
-        prompt = prompt.replace(
-            "- Constraints — deadline, team size (ask ONCE, accept whatever they say)\n", "")
-    if state.get("features_v2"):
-        prompt = prompt.replace(
-            "- V2 features — anything mentioned but not critical for launch\n", "")
+    # Inject turn count so the LLM knows when to wrap up (3-5 turn target)
+    turn_count = len([
+        m for m in state.get("conversation_history", [])
+        if m["role"] == "user"
+    ])
+    has_goal = bool(state.get("project_goal"))
+    has_features = bool(state.get("features_v1"))
+
+    if turn_count >= 4 and has_goal and has_features:
+        prompt += (
+            "\n\nIMPORTANT: This is turn {turn}. You have the project goal and "
+            "core features. Output CONVERSATION_COMPLETE now unless the developer "
+            "is actively asking for changes."
+        ).format(turn=turn_count + 1)
+    elif turn_count >= 3 and has_goal:
+        prompt += (
+            "\n\nNOTE: This is turn {turn}. You should be wrapping up. "
+            "If you have enough to generate a useful plan, output CONVERSATION_COMPLETE."
+        ).format(turn=turn_count + 1)
 
     return prompt
 
@@ -341,51 +356,34 @@ def _extract_state_incremental(state: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Sliding window — summarize old turns, keep recent ones in full
+# Conversation memory — retrieve relevant past turns (no LLM summarization)
 # ---------------------------------------------------------------------------
 
-SUMMARIZE_PROMPT = """Summarize the following older conversation turns into a brief paragraph (max 100 words).
-Keep all confirmed decisions, tech choices, and feature lists. Drop greetings and filler.
-Return ONLY the summary text, no extra formatting."""
+def _apply_memory_window(
+    state: dict, memory: ConversationMemory, user_message: str
+) -> tuple[str, list]:
+    """Return (retrieved_past_context, recent_turns) for message building.
 
-
-def _apply_sliding_window(state: dict) -> tuple[str, list]:
-    """Return (summary_of_old_turns, recent_turns) for message building.
-    Keeps the last WINDOW_SIZE messages in full, summarizes older ones."""
+    Keeps the last WINDOW_SIZE messages in full.  For older turns, uses
+    conversation memory (embedding similarity) to pull only the relevant
+    ones — no LLM summarization call needed.
+    """
     history = state["conversation_history"]
 
     if len(history) <= WINDOW_SIZE:
-        return state.get("conversation_summary", ""), history
+        return "", history
 
-    old_turns = history[:-WINDOW_SIZE]
     recent_turns = history[-WINDOW_SIZE:]
 
-    # Check if we already summarized up to this point
-    existing_summary = state.get("conversation_summary", "")
-    if existing_summary and len(old_turns) <= state.get("_last_summarized_count", 0):
-        return existing_summary, recent_turns
-
-    # Summarize old turns (including any previous summary)
-    old_text = ""
-    if existing_summary:
-        old_text = f"Previous summary: {existing_summary}\n\n"
-    old_text += "\n".join(
-        f"{m['role'].upper()}: {m['content']}" for m in old_turns
+    # Retrieve relevant older turns from conversation memory
+    retrieved = memory.retrieve(
+        query=user_message,
+        top_k=3,
+        skip_last_n=WINDOW_SIZE,
+        max_chars_per_turn=300,
     )
-
-    messages = [
-        {"role": "system", "content": SUMMARIZE_PROMPT},
-        {"role": "user", "content": old_text},
-    ]
-    try:
-        summary = chat(messages, stream=False, label="conversation_summary",
-                       use_cache=True)
-        state["conversation_summary"] = summary.strip()
-        state["_last_summarized_count"] = len(old_turns)
-    except Exception:
-        pass  # keep existing summary if summarization fails
-
-    return state.get("conversation_summary", ""), recent_turns
+    past_context = memory.format_for_prompt(retrieved, max_chars=800)
+    return past_context, recent_turns
 
 
 # ---------------------------------------------------------------------------
@@ -408,8 +406,21 @@ def _opening_message(state: dict) -> str:
             "refine modules, or restructure the architecture."
         )
 
+    # Knowledge base notification
+    kb_note = ""
+    try:
+        from planagent.knowledge.vectorstore import collection_exists, get_chunk_count
+        if collection_exists():
+            kb_note = (
+                "\n📚 *I have built-in system design knowledge (architecture patterns, "
+                "scaling strategies, design best practices) that I'll use to guide "
+                "recommendations throughout our conversation.*\n"
+            )
+    except Exception:
+        pass
+
     if state["scenario"] == "empty":
-        return "what are you building? Even one line is fine to start."
+        return kb_note + "\nwhat are you building? Even one line is fine to start."
     s = state["existing_summary"]
     lang = s.get("language", "project")
     fw = s.get("framework", "unknown framework")
@@ -490,7 +501,7 @@ def _opening_message(state: dict) -> str:
         if med:
             lines.append(f"- **Likely** — {', '.join(med[:6])}")
 
-    lines.append("\nWhat do you want to add or change?")
+    lines.append(kb_note + "\nWhat do you want to add or change?")
     return "\n".join(lines)
 
 
@@ -511,13 +522,51 @@ CURRENT PLAN:
 
 
 # ---------------------------------------------------------------------------
+# RAG knowledge retrieval — fetch relevant architecture guidance
+# ---------------------------------------------------------------------------
+
+def _update_rag_context(state: dict, user_message: str = "") -> dict:
+    """Retrieve fresh RAG chunks based on current state + user message.
+    Skips retrieval if query hasn't changed meaningfully."""
+    try:
+        from planagent.knowledge.retriever import retrieve, _build_query_from_state
+        query = _build_query_from_state(state, user_message)
+        # Skip if query is essentially the same as last time
+        if query and query != state.get("rag_last_query", ""):
+            chunks = retrieve(state, user_message)
+            if chunks:
+                state["rag_context"] = chunks
+                state["rag_last_query"] = query
+    except Exception:
+        pass  # RAG is optional — never block conversation on retrieval failure
+    return state
+
+
+# ---------------------------------------------------------------------------
 # Main conversation loop
 # ---------------------------------------------------------------------------
 
 def run_conversation(state: dict) -> dict:
     """Main phase 1 loop. Runs until conversation_complete.
-    Uses sliding window + incremental extraction for token efficiency.
-    Renders Claude Code-style panels and multiple-choice options."""
+
+    Token-optimised architecture:
+    - Every turn is saved to a ConversationStore (temp JSONL file) in parallel.
+    - During conversation, only the LAST agent message is sent as history
+      (not a window). The system prompt carries all collected state + RAG.
+    - At plan generation time, full conversation is loaded from the store.
+    - Supports /back — user can revisit previous questions and change answers.
+    - All code blocks are stripped from LLM output (planning mode).
+    """
+
+    # Conversation memory — embeds each turn for relevance-based retrieval
+    memory = ConversationMemory()
+
+    # Conversation store — parallel temp-file persistence
+    project_root = state.get("project_root", ".")
+    store = ConversationStore(
+        store_path=Path(project_root) / ".planagent" / "conversation_turns.jsonl"
+    )
+    state["_conversation_store"] = store  # expose for plan_generator
 
     # Opening message — rendered as a panel
     opening = _opening_message(state)
@@ -525,6 +574,8 @@ def run_conversation(state: dict) -> dict:
     state["conversation_history"].append(
         {"role": "assistant", "content": opening}
     )
+    store.add("assistant", opening, turn_num=0)
+    memory.add(opening, turn_num=0, role="assistant")
 
     turn_count = 0
     # pending_choice holds user input from an arrow-key selection so we
@@ -545,6 +596,23 @@ def run_conversation(state: dict) -> dict:
             console.print("[dim]Session ended.[/dim]")
             break
 
+        # --- /back command — revisit previous question --------------------
+        if user_input.strip().lower() == BACK_COMMAND:
+            prev_question = store.go_back()
+            if prev_question:
+                render_go_back(prev_question["content"])
+                # Also remove last two entries from conversation_history
+                # so state extraction sees the corrected version
+                if len(state["conversation_history"]) >= 2:
+                    state["conversation_history"] = state["conversation_history"][:-2]
+                # Re-extract state from corrected history
+                state["last_extracted_turn"] = 0
+                state = _extract_state_incremental(state)
+                turn_count = max(0, turn_count - 1)
+            else:
+                render_go_back_unavailable()
+            continue
+
         # --- Guardrails: check user input is on-topic ----------------
         # Skip guardrails for selections from agent-suggested options —
         # the agent itself proposed them, so they are inherently on-topic.
@@ -557,6 +625,8 @@ def run_conversation(state: dict) -> dict:
             state["conversation_history"].append(
                 {"role": "assistant", "content": refusal}
             )
+            store.add("user", user_input, turn_num=turn_count + 1)
+            store.add("assistant", refusal, turn_num=turn_count + 1)
             continue
 
         state["conversation_history"].append(
@@ -564,23 +634,52 @@ def run_conversation(state: dict) -> dict:
         )
         turn_count += 1
 
-        # Incremental state extraction every turn
-        console.print("[dim]Updating project context...[/dim]")
-        state = _extract_state_incremental(state)
+        # Save user turn to store + memory (parallel persistence)
+        rag_refs = []
+        try:
+            from planagent.knowledge.retriever import extract_rag_refs
+            rag_refs = extract_rag_refs(state.get("rag_context", []))
+        except Exception:
+            pass
+        store.add("user", user_input, turn_num=turn_count, rag_refs=rag_refs)
+        memory.add(user_input, turn_num=turn_count, role="user")
+        render_turn_saved(turn_count)
+
+        # Incremental state extraction every 2 turns (saves ~50% extraction tokens)
+        if turn_count == 1 or turn_count % 2 == 0:
+            console.print("[dim]Updating project context...[/dim]")
+            state = _extract_state_incremental(state)
+
+        # RAG: refresh knowledge context EVERY turn (always-on)
+        state = _update_rag_context(state, user_input)
 
         # Build system prompt with dynamic trimming
         system = _build_system_prompt(state)
 
-        # Apply sliding window — summarize old turns, keep recent in full
-        summary, recent_history = _apply_sliding_window(state)
-
-        # If there's a summary of old turns, prepend it as context
-        if summary:
-            summary_msg = {"role": "assistant",
-                           "content": f"[Earlier conversation summary: {summary}]"}
-            windowed_history = [summary_msg] + recent_history[:-1]
+        # --- Minimal context: only last agent message as history ----------
+        # This is the key token optimisation. Instead of sending a window
+        # of 4+ messages, we send only the last agent question so the LLM
+        # knows what it asked. All other context is in the system prompt
+        # (state + RAG). Full conversation lives in the store for plan gen.
+        if MINIMAL_CONTEXT:
+            last_agent = store.get_last_agent_turn()
+            if last_agent:
+                windowed_history = [
+                    {"role": "assistant", "content": last_agent["content"]}
+                ]
+            else:
+                windowed_history = []
         else:
-            windowed_history = recent_history[:-1]
+            # Legacy fallback — memory window
+            past_context, recent_history = _apply_memory_window(
+                state, memory, user_input
+            )
+            if past_context:
+                context_msg = {"role": "assistant",
+                               "content": f"[Relevant earlier context: {past_context}]"}
+                windowed_history = [context_msg] + recent_history[:-1]
+            else:
+                windowed_history = recent_history[:-1]
 
         messages = build_messages(system, windowed_history, user_input)
 
@@ -593,8 +692,12 @@ def run_conversation(state: dict) -> dict:
         if not is_on_topic:
             response = cleaned
 
-        # Parse out ```options blocks → clean text + option list
-        message_text, options = parse_agent_response(response)
+        # Parse out ```options blocks FIRST — before code stripping,
+        # because strip_code_blocks would destroy the options block too.
+        message_text, options, multi_select = parse_agent_response(response)
+
+        # Strip code blocks from message text (planning mode — no code)
+        message_text = strip_code_blocks(message_text)
 
         # The streaming panel was transient (disappears when done).
         # Now render the final clean panel with options block stripped.
@@ -608,6 +711,16 @@ def run_conversation(state: dict) -> dict:
         state["conversation_history"].append(
             {"role": "assistant", "content": response}
         )
+        # Save assistant turn to store + memory (parallel persistence)
+        rag_refs_out = []
+        try:
+            from planagent.knowledge.retriever import extract_rag_refs
+            rag_refs_out = extract_rag_refs(state.get("rag_context", []))
+        except Exception:
+            pass
+        store.add("assistant", response, turn_num=turn_count, rag_refs=rag_refs_out)
+        memory.add(response, turn_num=turn_count, role="assistant")
+        render_turn_saved(turn_count)
 
         # Check completion signal
         if DONE_SIGNAL in response:
@@ -620,7 +733,7 @@ def run_conversation(state: dict) -> dict:
 
         # --- If options were presented, arrow-key select ----------------
         if options:
-            choice = get_user_choice(options)
+            choice = get_user_choice(options, multi=multi_select)
             if not choice:
                 console.print("[dim]Session ended.[/dim]")
                 break

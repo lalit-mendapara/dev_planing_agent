@@ -1,0 +1,544 @@
+================================================================
+ARCHITECTURE PATTERNS — FULL KNOWLEDGE SOURCE MATERIAL
+================================================================
+Category: Architecture Patterns
+Sub-categories: Monolithic, Microservices, Event-Driven, Serverless, SOA, Layered (N-Tier)
+Purpose: Source material for RAG vector DB — Plan & Architect Agent
+================================================================
+
+
+----------------------------------------------------------------
+SECTION 1: WHAT ARE ARCHITECTURE PATTERNS
+----------------------------------------------------------------
+
+An architecture pattern is a proven, reusable solution to a commonly occurring problem in software architecture. It defines the overall structural organization of a software system — how components are divided, how they communicate, and how responsibilities are distributed.
+
+Architecture patterns operate at the HLD level. They are chosen BEFORE any code is written and have long-lasting impact on the system's scalability, maintainability, deployment strategy, and team structure.
+
+Choosing the wrong architecture pattern is extremely costly to fix later. The agent must recommend the right pattern based on project signals, scale, team size, and domain.
+
+Six primary architecture patterns:
+1. Monolithic
+2. Microservices
+3. Event-Driven
+4. Serverless
+5. SOA (Service-Oriented Architecture)
+6. Layered / N-Tier
+
+These patterns are not mutually exclusive. Real systems often combine multiple patterns. For example: Microservices architecture where individual services are internally Layered, and services communicate through an Event-Driven message bus.
+
+MASTER DECISION RULE:
+- Small project, single team, fast MVP → Monolithic
+- Large system, multiple teams, independent scaling → Microservices
+- Async processing, decoupled reactions to events → Event-Driven (often combined with Microservices)
+- Unpredictable traffic, cost-per-execution model → Serverless
+- Enterprise with existing legacy systems and SOA governance → SOA
+- Traditional web apps, internal tools, clear separation of concerns → Layered N-Tier
+
+
+----------------------------------------------------------------
+SECTION 2: MONOLITHIC ARCHITECTURE
+----------------------------------------------------------------
+
+DEFINITION:
+A monolithic architecture is a single deployable unit where all components of the application — UI, business logic, data access layer — are packaged and deployed together as one application.
+
+Everything lives in one codebase, one process, one deployment artifact.
+
+STRUCTURE:
+[Client] → [Monolithic Application (Presentation + Business Logic + Data Access)] → [Single Database]
+
+REAL WORLD EXAMPLES:
+- Early versions of Airbnb, Uber, Twitter — all started monolithic
+- Most Django and Rails applications by default
+- Internal company tools and admin dashboards
+
+ADVANTAGES:
+1. Simple to develop — one codebase, one repo, no network calls between components
+2. Simple to test — end-to-end testing in one process
+3. Simple to deploy — one artifact, one server
+4. Low operational overhead — no service discovery, no distributed tracing needed
+5. Fast development velocity early on — no inter-service contracts to maintain
+6. Easy debugging — single process, single log stream
+
+DISADVANTAGES:
+1. Scaling problem — must scale the entire app even if only one feature is under load
+2. Deployment risk — any change requires redeployment of the entire system
+3. Technology lock-in — entire app must use the same language and framework
+4. Growing complexity — codebase becomes a "big ball of mud" over time
+5. Team bottleneck — multiple teams working on one codebase causes merge conflicts
+6. Long build and deploy times as codebase grows
+7. Single point of failure — one bug can crash the entire system
+
+WHEN TO USE MONOLITHIC:
+- MVP or prototype with tight deadline (under 2 months)
+- Team size is 1-3 developers
+- Project scope is well-defined and limited
+- Expected user base under 10,000 users initially
+- Internal tool or admin dashboard
+- No requirement for independent scaling of components
+- Early-stage startup validating product-market fit
+
+WHEN TO AVOID MONOLITHIC:
+- Multiple teams working in parallel on different features
+- Different components have drastically different scaling needs
+- System needs 99.99% uptime (monolith = single point of failure)
+- Project is expected to grow significantly in scope
+
+MIGRATION PATH:
+Monolithic → Microservices (Strangler Fig Pattern)
+→ Identify bounded contexts inside the monolith
+→ Extract one service at a time
+→ Route traffic to new service via API Gateway
+→ Decommission extracted part from monolith
+→ Repeat until fully migrated
+
+DECISION RULE — INFER FROM PROJECT:
+- "todo app" → Monolithic, Django or FastAPI single app
+- "internal HR tool" → Monolithic acceptable
+- "MVP for startup, launch in 6 weeks" → Monolithic first, plan migration path
+- "food delivery app" → Do NOT use Monolithic, too many independent concerns
+- "e-commerce with 100k users" → Do NOT use Monolithic
+
+
+----------------------------------------------------------------
+SECTION 3: MICROSERVICES ARCHITECTURE
+----------------------------------------------------------------
+
+DEFINITION:
+Microservices architecture structures an application as a collection of small, independently deployable services. Each service owns a specific business capability, runs in its own process, communicates over a network (HTTP/REST or messaging), and has its own database.
+
+Core principle: Each service is independently deployable, scalable, and replaceable.
+
+STRUCTURE:
+[Client]
+   ↓
+[API Gateway] — single entry point, routes to services
+   ↓
+[Auth Service] [User Service] [Order Service] [Payment Service] [Notification Service]
+   ↓               ↓               ↓               ↓                   ↓
+[Auth DB]      [User DB]      [Order DB]      [Payment DB]      [Notification DB]
+
+Each service has its own database — this is called Database per Service pattern.
+Services communicate via:
+- Synchronous: REST (HTTP) or gRPC
+- Asynchronous: Message queues (Kafka, RabbitMQ)
+
+REAL WORLD EXAMPLES:
+- Netflix — 700+ microservices
+- Amazon — "two-pizza team" rule, each team owns one service
+- Uber — split monolith into microservices when scaling became critical
+
+ADVANTAGES:
+1. Independent scaling — scale only the service under load (e.g., scale Order Service during peak)
+2. Independent deployment — deploy one service without touching others
+3. Technology diversity — each service can use different language/framework/DB
+4. Fault isolation — failure in one service does not crash the entire system
+5. Team autonomy — each team owns their service end-to-end
+6. Easier to understand — each service is small and focused
+7. Continuous deployment — services can be deployed multiple times per day
+
+DISADVANTAGES:
+1. Distributed system complexity — network failures, latency, partial failures
+2. Data consistency — no single DB transaction across services (eventual consistency)
+3. Service discovery — services need to find each other dynamically
+4. Operational overhead — requires container orchestration (Kubernetes), service mesh
+5. Distributed tracing — debugging requires tracing requests across multiple services
+6. Testing complexity — integration testing requires running multiple services
+7. Higher infrastructure cost — multiple databases, containers, load balancers
+
+CORE SUPPORTING CONCEPTS FOR MICROSERVICES:
+- API Gateway — single entry point, authentication, rate limiting, routing
+- Service Discovery — Consul, Kubernetes DNS
+- Circuit Breaker — prevents cascade failures (Hystrix, Resilience4j)
+- Distributed Tracing — trace a request across services (Jaeger, Zipkin, Langfuse for AI)
+- Saga Pattern — manage distributed transactions across services
+- Database per Service — each service owns its data, no shared DB
+
+WHEN TO USE MICROSERVICES:
+- Large team (5+ developers) with separate sub-teams per domain
+- Different components have very different scaling requirements
+- System requires 99.99% uptime with zero-downtime deployments
+- Different services need different technology stacks
+- System is expected to grow to millions of users
+- Organization follows domain-driven design (DDD)
+- CI/CD pipeline where teams deploy independently
+
+WHEN NOT TO USE MICROSERVICES:
+- Small team (under 4 developers) — operational overhead outweighs benefits
+- MVP or early-stage product — too much complexity for unknown requirements
+- Simple CRUD application — no benefit from service separation
+- Team lacks DevOps/Kubernetes expertise
+- Tight deadline — microservices take 3-4x longer to set up initially
+
+DECISION RULE — INFER FROM PROJECT:
+- "food delivery app" → Microservices (User, Restaurant, Order, Payment, Delivery, Notification services)
+- "e-commerce platform" → Microservices (Product, Cart, Order, Payment, Inventory, Review services)
+- "hospital management system" → Microservices (Patient, Appointment, Billing, Lab, Pharmacy services)
+- "social media platform at scale" → Microservices (User, Post, Feed, Notification, Search services)
+- "todo app" → DO NOT use Microservices
+- "startup MVP" → DO NOT use Microservices initially
+
+
+----------------------------------------------------------------
+SECTION 4: EVENT-DRIVEN ARCHITECTURE
+----------------------------------------------------------------
+
+DEFINITION:
+Event-Driven Architecture (EDA) is a pattern where components communicate by producing and consuming events. An event is a record that something happened (e.g., "OrderPlaced", "PaymentCompleted", "UserRegistered"). Producers emit events without knowing who will consume them. Consumers react to events independently.
+
+Core principle: Loose coupling through asynchronous event-based communication.
+
+STRUCTURE:
+[Producer Service] → publishes event → [Message Broker (Kafka/RabbitMQ)] → delivers event → [Consumer Service 1]
+                                                                           → delivers event → [Consumer Service 2]
+                                                                           → delivers event → [Consumer Service 3]
+
+COMPONENTS:
+- Event Producer — the service that generates and publishes events
+- Event Broker — the message bus that stores and routes events (Kafka, RabbitMQ, AWS SNS/SQS)
+- Event Consumer — the service that subscribes to and processes events
+- Event Schema — the structure of the event payload (usually JSON)
+
+TYPES OF EVENT-DRIVEN PATTERNS:
+1. Pub/Sub (Publish-Subscribe) — one producer, many consumers (Kafka topics)
+2. Event Streaming — continuous stream of events, consumers can replay (Kafka)
+3. Message Queue — point-to-point, one consumer per message (RabbitMQ)
+4. Event Sourcing — store all state changes as events, reconstruct state by replaying events
+5. CQRS (Command Query Responsibility Segregation) — separate read and write models, events sync them
+
+REAL WORLD EXAMPLES:
+- Uber — "trip started" event triggers driver tracking, billing, notifications simultaneously
+- Amazon — "order placed" event triggers inventory check, payment processing, shipping simultaneously
+- LinkedIn — "connection request" event triggers notification, feed update, email simultaneously
+
+ADVANTAGES:
+1. Loose coupling — producer and consumer don't know about each other
+2. Scalability — consumers can scale independently based on event volume
+3. Resilience — if a consumer is down, events queue up and are processed when it recovers
+4. Parallel processing — multiple consumers process the same event simultaneously
+5. Extensibility — add new consumers without changing the producer
+6. Audit trail — event log serves as complete history of everything that happened
+7. Replay capability — reprocess historical events (Kafka retains events)
+
+DISADVANTAGES:
+1. Eventual consistency — consumers process events asynchronously, so state is not immediately consistent
+2. Complexity in debugging — tracing an event through multiple consumers is hard
+3. Event schema management — changing event schema breaks consumers
+4. Ordering guarantees — ensuring events are processed in order is non-trivial
+5. Duplicate event handling — consumers must be idempotent (handle same event twice safely)
+6. Infrastructure dependency — requires a reliable message broker
+
+WHEN TO USE EVENT-DRIVEN:
+- Multiple services need to react to the same action (fan-out)
+- Processing can be asynchronous (notifications, emails, analytics)
+- Need to decouple services that would otherwise have direct dependencies
+- High write throughput where synchronous processing would be a bottleneck
+- Need audit trail or event replay capability
+- Workflows where steps happen in sequence but not necessarily immediately
+
+WHEN NOT TO USE EVENT-DRIVEN:
+- When immediate response is required (user is waiting for synchronous result)
+- Simple apps where direct service calls are sufficient
+- Team unfamiliar with async programming and message brokers
+- Small system where the overhead of a message broker is not justified
+
+EVENT-DRIVEN IN AI SYSTEMS:
+- "Document uploaded" event → triggers ingestion pipeline (chunk, embed, store in vector DB)
+- "User message received" event → triggers agent processing pipeline
+- "Agent task completed" event → triggers notification to user
+- "Model response generated" event → triggers logging to Langfuse observability
+
+DECISION RULE — INFER FROM PROJECT:
+- "notification system" → Event-Driven mandatory (Kafka/RabbitMQ)
+- "order processing" → Event-Driven for post-order actions (email, inventory, shipping)
+- "real-time analytics" → Event streaming with Kafka
+- "AI document ingestion pipeline" → Event-Driven (upload event triggers async processing)
+- "simple blog" → DO NOT use Event-Driven, overkill
+- "real-time chat" → Event-Driven for message delivery and notifications
+
+
+----------------------------------------------------------------
+SECTION 5: SERVERLESS ARCHITECTURE
+----------------------------------------------------------------
+
+DEFINITION:
+Serverless architecture is a model where the cloud provider manages the infrastructure, and developers deploy individual functions that are triggered by events. There are no servers to provision or manage. You pay only for the compute time your functions actually use.
+
+Also called FaaS — Function as a Service.
+
+Core principle: No infrastructure management. Code runs in stateless functions triggered by events.
+
+STRUCTURE:
+[Trigger (HTTP request / Event / Schedule / Queue)] → [Function (Lambda / Cloud Function)] → [External Services (DB, Storage, API)]
+
+PROVIDERS:
+- AWS Lambda — most mature, widest ecosystem
+- Google Cloud Functions
+- Azure Functions
+- Cloudflare Workers — edge serverless, ultra low latency
+- Vercel Functions — frontend-focused serverless
+
+ADVANTAGES:
+1. No infrastructure management — no servers, no patching, no scaling configuration
+2. Auto-scaling — scales from 0 to millions of requests automatically
+3. Cost efficiency — pay per invocation, not for idle servers
+4. Fast time to market — focus on code, not infrastructure
+5. Inherent high availability — cloud provider handles redundancy
+6. Easy to deploy — just push the function, cloud handles the rest
+
+DISADVANTAGES:
+1. Cold start latency — first invocation after idle period has higher latency (100ms to 2s)
+2. Execution time limits — AWS Lambda max 15 minutes, not suitable for long-running tasks
+3. Stateless — no local state between invocations, must use external storage
+4. Vendor lock-in — serverless functions are tightly coupled to cloud provider APIs
+5. Debugging difficulty — distributed, ephemeral environment hard to debug locally
+6. Limited local testing — cloud environment differences from local setup
+7. Cost unpredictability at very high scale — can become expensive
+
+WHEN TO USE SERVERLESS:
+- Event-triggered background tasks (image resizing, file processing, email sending)
+- APIs with highly unpredictable or spiky traffic
+- Scheduled jobs and cron tasks (daily reports, data cleanup)
+- Webhook handlers
+- Lightweight API backends for mobile apps
+- Glue code between services
+- Prototyping and small APIs with low budget
+
+WHEN NOT TO USE SERVERLESS:
+- Long-running processes (ML model training, video transcoding)
+- Applications requiring persistent connections (WebSocket servers, streaming)
+- High-frequency, consistently high-traffic services (cold start penalty)
+- Applications needing complex local state or session management
+- Teams requiring predictable, low-latency response at all times
+
+SERVERLESS IN AI SYSTEMS:
+- Trigger embedding job when document is uploaded (S3 → Lambda → Qdrant)
+- Scheduled job to refresh vector DB with new documents
+- Webhook handler for third-party AI API callbacks
+- Lightweight inference for simple classification tasks
+- NOT suitable for: long LLM inference chains, agentic workflows with many tool calls
+
+DECISION RULE — INFER FROM PROJECT:
+- "image upload and resize" → Serverless (trigger on upload, process, store)
+- "send daily report email" → Serverless scheduled function
+- "webhook from payment gateway" → Serverless handler
+- "real-time chat backend" → DO NOT use Serverless (persistent connections needed)
+- "AI agent with multi-step reasoning" → DO NOT use Serverless (execution time limits)
+- "spiky traffic API" → Serverless is cost-effective
+
+
+----------------------------------------------------------------
+SECTION 6: SERVICE-ORIENTED ARCHITECTURE (SOA)
+----------------------------------------------------------------
+
+DEFINITION:
+Service-Oriented Architecture is an enterprise architecture pattern where software components (services) are designed to be reused across different applications within an organization. Services communicate through standardized protocols (typically SOAP/XML or REST) and are coordinated by an Enterprise Service Bus (ESB).
+
+SOA is the predecessor to Microservices. It is broader in scope — it applies at the organization level, not just the application level.
+
+Core principle: Enterprise-wide service reuse through standardized integration.
+
+STRUCTURE:
+[App 1] ──┐
+[App 2] ──┤→ [Enterprise Service Bus (ESB)] ←→ [Shared Services: Auth, Payment, Notification]
+[App 3] ──┘
+
+DIFFERENCE BETWEEN SOA AND MICROSERVICES:
+Aspect              | SOA                              | Microservices
+--------------------|----------------------------------|----------------------------------
+Scope               | Enterprise-wide                  | Application-level
+Communication       | ESB (heavy middleware)           | Lightweight REST/gRPC/messaging
+Service size        | Larger, coarser-grained          | Smaller, fine-grained
+Data sharing        | Shared databases common          | Database per service
+Governance          | Centralized (ESB controls flow)  | Decentralized
+Deployment          | Often co-deployed                | Independently deployed
+Use case            | Legacy enterprise integration    | Cloud-native new systems
+
+ADVANTAGES:
+1. Reusability — services shared across multiple applications in the organization
+2. Interoperability — standardized protocols enable integration of different systems
+3. Governance — centralized control over service contracts and security
+4. Legacy integration — ESB can wrap legacy systems and expose them as services
+
+DISADVANTAGES:
+1. ESB becomes a bottleneck and single point of failure
+2. Heavy middleware adds latency and complexity
+3. Slower to change — centralized governance slows down teams
+4. Expensive — ESB tools (IBM MQ, MuleSoft) are costly
+5. Over-engineering for most modern applications
+
+WHEN TO USE SOA:
+- Large enterprise with many existing legacy systems that need integration
+- Organization-level service sharing across multiple business units
+- Government or regulated enterprise environments
+- When ESB tools (MuleSoft, IBM Integration Bus) are already in the organization
+- Migrating from legacy mainframe systems to modern services
+
+WHEN NOT TO USE SOA:
+- Startups or small companies (use Microservices instead)
+- New cloud-native systems (Microservices is the modern equivalent)
+- Teams without enterprise architecture governance
+
+DECISION RULE — INFER FROM PROJECT:
+- "enterprise integration across 10 internal apps" → SOA
+- "government department connecting legacy systems" → SOA
+- "startup building new SaaS product" → DO NOT use SOA, use Microservices
+- "bank modernizing mainframe" → SOA as integration layer
+
+
+----------------------------------------------------------------
+SECTION 7: LAYERED (N-TIER) ARCHITECTURE
+----------------------------------------------------------------
+
+DEFINITION:
+Layered architecture (also called N-Tier architecture) organizes the system into horizontal layers, where each layer has a specific responsibility and only communicates with the layer directly above or below it.
+
+The most common variant is the 3-Tier architecture:
+1. Presentation Layer (UI) — what the user sees and interacts with
+2. Business Logic Layer (Application/Service) — rules, processing, decisions
+3. Data Layer (Repository/DB) — storage and retrieval of data
+
+Extended variants:
+- 4-Tier: Presentation → API → Business Logic → Data
+- N-Tier: Any number of layers with clear separation
+
+Core principle: Separation of concerns — each layer has one job and communicates only through defined interfaces.
+
+STRUCTURE (3-Tier):
+[Presentation Layer]  → React, Angular, mobile app, HTML templates
+        ↓
+[Business Logic Layer] → FastAPI, Django, Express.js, Spring Boot
+        ↓
+[Data Access Layer]   → Repository classes, ORM (SQLAlchemy, Django ORM)
+        ↓
+[Database]            → PostgreSQL, MySQL, MongoDB
+
+ADVANTAGES:
+1. Clear separation of concerns — each layer has one responsibility
+2. Easy to understand — most developers are familiar with this pattern
+3. Testability — each layer can be unit tested independently
+4. Maintainability — change one layer without breaking others (if interfaces are stable)
+5. Security — can enforce security at each layer boundary
+6. Reusability — business logic layer can serve multiple presentation layers (web + mobile)
+
+DISADVANTAGES:
+1. Performance overhead — request passes through every layer, even if some layers add no value
+2. Monolithic tendency — layered architecture is usually deployed as one unit
+3. Tight coupling between layers — changes in data model ripple through all layers
+4. Anti-pattern risk: "Sinkhole anti-pattern" — request passes through layers that do nothing but forward
+5. Not ideal for highly scalable distributed systems
+
+WHEN TO USE LAYERED ARCHITECTURE:
+- Traditional web applications with clear UI → Logic → Data separation
+- Internal enterprise applications
+- REST APIs with straightforward CRUD operations
+- Applications where the team is familiar with MVC/MTV pattern
+- When the system doesn't need independent service scaling
+- As the internal structure of a single Microservice (a microservice itself can be layered internally)
+
+WHEN NOT TO USE LAYERED ARCHITECTURE AS THE SOLE PATTERN:
+- Large distributed systems requiring independent scaling per feature
+- Systems with complex event-driven workflows
+- When different features have drastically different technology needs
+
+LAYERED ARCHITECTURE IN DJANGO/FASTAPI CONTEXT (relevant to your stack):
+- Presentation: FastAPI routes / Django views
+- Business Logic: Service classes (services.py)
+- Data Access: Repository classes or Django ORM (models.py, repositories.py)
+- Database: PostgreSQL
+
+DECISION RULE — INFER FROM PROJECT:
+- "REST API backend" → Layered architecture internally (routes → services → repositories → DB)
+- "Django web app" → Layered (MTV = Models, Templates, Views = 3-tier)
+- "FastAPI backend" → Layered (routers → services → repositories → DB)
+- "internal company portal" → Layered 3-tier sufficient
+- "global e-commerce platform" → Layered alone is NOT enough, combine with Microservices
+
+
+----------------------------------------------------------------
+SECTION 8: COMBINING ARCHITECTURE PATTERNS
+----------------------------------------------------------------
+
+Real production systems rarely use just one pattern. Here are the most common combinations:
+
+COMBINATION 1: Microservices + Event-Driven
+Use case: Food delivery, e-commerce, ride-sharing
+→ Services are independently deployed microservices
+→ Inter-service communication for async operations uses Kafka/RabbitMQ
+→ Example: OrderService publishes "OrderPlaced" event → NotificationService and InventoryService consume it
+
+COMBINATION 2: Microservices + Layered (internally)
+Use case: Any large system with well-structured individual services
+→ Each microservice is internally structured as a layered application
+→ Router → Service → Repository → DB inside each microservice
+
+COMBINATION 3: Serverless + Event-Driven
+Use case: Background processing pipelines, data ingestion
+→ Events trigger serverless functions
+→ Example: File uploaded to S3 → Lambda triggered → process and store result
+
+COMBINATION 4: Layered + Event-Driven
+Use case: Traditional apps that need async processing
+→ Core app is layered (Django/FastAPI)
+→ Heavy tasks offloaded to Celery workers via Redis/RabbitMQ
+→ Example: Django app → Celery task queue → background worker processes report
+
+COMBINATION 5: Microservices + Serverless
+Use case: Systems where some services have unpredictable traffic
+→ Core services run as containers (always-on microservices)
+→ Bursty or event-triggered tasks run as serverless functions
+
+AI SYSTEM COMBINATION (most relevant for your projects):
+Layered (FastAPI) + Event-Driven (Celery/Redis) + Modular (each agent is a module) + Serverless (webhooks)
+→ FastAPI handles user requests (layered)
+→ LLM inference and document processing offloaded to Celery workers (event-driven)
+→ Each agent is an independent module (modular)
+→ External webhooks handled by lightweight serverless handlers
+
+
+----------------------------------------------------------------
+SECTION 9: ARCHITECTURE PATTERN SELECTION DECISION TABLE
+----------------------------------------------------------------
+
+Project Signal                          | Recommended Pattern
+----------------------------------------|--------------------------------------------
+Small team (1-3), fast MVP              | Monolithic
+Large team, independent deployments     | Microservices
+Multiple services react to same action  | Event-Driven (+ Microservices)
+Unpredictable / spiky traffic           | Serverless
+Enterprise legacy integration           | SOA
+Simple REST API, clear UI/logic/DB      | Layered (N-Tier)
+AI agent with async processing          | Layered + Event-Driven + Modular
+RAG pipeline with background ingestion  | Layered + Event-Driven (Celery)
+Real-time features (chat, tracking)     | Event-Driven + Microservices
+Startup → scale later                   | Monolithic → Microservices migration path
+
+
+----------------------------------------------------------------
+SECTION 10: QUESTIONS THE AGENT MUST ASK vs INFER
+----------------------------------------------------------------
+
+INFER FROM PROJECT TOPIC (do not ask):
+- "delivery" / "marketplace" / "platform" → Microservices + Event-Driven
+- "enterprise" / "legacy integration" → SOA or SOA + Microservices hybrid
+- "background jobs" / "async tasks" → Event-Driven, Celery/Redis or Kafka
+- "webhook" / "scheduled job" → Serverless
+- "REST API" / "web app" internally → Layered architecture inside each service
+- "AI agent" / "RAG" / "LLM app" → Layered + Event-Driven + Modular combination
+- "real-time" / "live" / "streaming" → Event-Driven mandatory
+
+ALWAYS ASK:
+1. Expected scale — how many users? (determines if Monolithic is viable)
+2. Team size — (determines if Microservices overhead is justified)
+3. MVP or production — (determines complexity level)
+
+NEVER ASK:
+- Which architecture pattern to use → agent decides from above signals
+- Whether to add a message queue → agent infers from async/decoupling need
+- Whether to use layered structure internally → always yes for any service
+
+
+----------------------------------------------------------------
+END OF ARCHITECTURE PATTERNS SOURCE MATERIAL
+================================================================

@@ -15,6 +15,7 @@ Requires-Dist: python-dotenv
 Requires-Dist: pydantic
 Requires-Dist: pytest
 Requires-Dist: questionary
+Requires-Dist: fastembed
 
 # Plan & Architect Agent
 
@@ -234,6 +235,18 @@ The agent creates its output **inside** whichever project you point it at.
 | `ModuleNotFoundError: No module named 'typer'` | Run `pip install -e .` inside the planagent folder |
 | `Connection refused` or LLM errors | Start Ollama: `ollama serve` |
 | Model not found | Download it: `ollama pull llama3.1` |
+
+---
+
+## Knowledge Base
+
+The agent ships with a **pre-built system design knowledge base** (architecture patterns, scaling strategies, design best practices). No setup needed — it's always available during conversations.
+
+To regenerate the pre-built index after editing source files:
+
+```bash
+python -m planagent.knowledge.prebuild
+```
 
 ---
 

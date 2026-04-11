@@ -1,0 +1,240 @@
+================================================================
+SYSTEM DESIGN LEVELS — FULL KNOWLEDGE SOURCE MATERIAL
+================================================================
+Category: System Design Levels
+Sub-categories: High-Level Design (HLD), Low-Level Design (LLD)
+Purpose: Source material for RAG vector DB — Plan & Architect Agent
+================================================================
+
+
+----------------------------------------------------------------
+SECTION 1: WHAT IS SYSTEM DESIGN
+----------------------------------------------------------------
+
+System design is the process of defining the architecture, components, modules, interfaces, and data flow of a system to satisfy specified requirements. It bridges the gap between a problem statement and a working, scalable, maintainable software system.
+
+System design is done at two levels:
+1. High-Level Design (HLD) — the big picture
+2. Low-Level Design (LLD) — the detailed implementation blueprint
+
+Both levels are required for a complete system. HLD comes first, LLD follows from it.
+
+DECISION RULE:
+- If a developer gives a project topic → always start with HLD first
+- If the project is a simple CRUD app with 1-2 tables → LLD alone may be sufficient
+- If the project has multiple services, users, or scaling concerns → HLD is mandatory before LLD
+
+
+----------------------------------------------------------------
+SECTION 2: HIGH-LEVEL DESIGN (HLD)
+----------------------------------------------------------------
+
+DEFINITION:
+High-Level Design describes the overall system architecture. It focuses on what components exist, how they communicate, and how data flows through the system — without going into code-level details.
+
+HLD answers these questions:
+- What are the major components of the system?
+- How do these components interact with each other?
+- What databases, queues, caches will be used and why?
+- How will the system scale?
+- What are the entry and exit points of the system?
+
+WHO DOES IT:
+- System architects
+- Senior engineers
+- Tech leads
+HLD is done BEFORE any code is written.
+
+OUTPUT ARTIFACTS OF HLD:
+- Architecture diagram (component diagram)
+- Data flow diagram
+- API contracts (high-level, not detailed)
+- Technology stack decisions
+- Scalability strategy
+- Component responsibility list
+
+WHAT HLD INCLUDES:
+1. Client layer — Web, Mobile, Third-party consumers
+2. API Gateway / Load Balancer — Entry point, routing, rate limiting
+3. Service layer — Core business logic services
+4. Data layer — Databases, caches, object storage
+5. Async layer — Message queues, event buses
+6. External integrations — Payment, SMS, Email, Maps APIs
+7. Observability layer — Logging, monitoring, tracing
+
+WHEN TO USE HLD:
+- Project has more than 2 services
+- System needs to handle more than 10,000 users
+- Team size is more than 3 developers
+- Project requires independent deployments
+- Project involves real-time features (chat, notifications, live tracking)
+- Project involves AI/ML components
+- Project is a marketplace, SaaS product, or platform
+
+WHEN HLD CAN BE LIGHTWEIGHT:
+- Internal tool with fewer than 50 users
+- MVP with a single developer and 2-week deadline
+- Simple form → save → display CRUD app
+
+DECISION RULE — INFER FROM PROJECT TOPIC:
+- "food delivery app" → HLD mandatory, microservices likely
+- "chat application" → HLD mandatory, event-driven, WebSocket
+- "hospital appointment system" → HLD mandatory, layered + queues
+- "AI resume builder" → HLD mandatory, RAG + LLM inference layer
+- "todo app" → lightweight HLD, monolithic acceptable
+- "e-learning platform" → HLD mandatory, CDN + video streaming + microservices
+- "fintech / payments" → HLD mandatory, strict security + compliance layer
+
+
+----------------------------------------------------------------
+SECTION 3: LOW-LEVEL DESIGN (LLD)
+----------------------------------------------------------------
+
+DEFINITION:
+Low-Level Design describes the implementation details of each component identified in HLD. It focuses on classes, methods, database schemas, API contracts, and design patterns used inside each component.
+
+LLD answers these questions:
+- What classes and methods will implement this feature?
+- What is the exact DB schema (tables, columns, indexes, relations)?
+- What design patterns are applied and where?
+- What is the detailed API contract (request/response structure)?
+- How is error handling done inside a service?
+
+WHO DOES IT:
+- Developers
+- Backend engineers
+- Full-stack engineers
+LLD is done AFTER HLD is finalized, BEFORE writing actual code.
+
+OUTPUT ARTIFACTS OF LLD:
+- Class diagrams
+- Sequence diagrams
+- Detailed DB schema (ERD)
+- API contracts with request/response payloads
+- Design pattern usage per component
+- Error handling strategy per service
+
+WHAT LLD INCLUDES:
+1. Class design — attributes, methods, relationships between classes
+2. DB schema — table names, column types, primary keys, foreign keys, indexes
+3. API design — endpoint, HTTP method, request body, response body, status codes
+4. Design patterns used — Repository, Factory, Singleton, Observer, Strategy, etc.
+5. Sequence flow — step-by-step interaction between objects for a use case
+6. Validation rules — field-level validations, business rule enforcement
+7. Error codes and exception handling — what errors are thrown and caught where
+
+WHEN TO USE LLD:
+- Always after HLD is done for any production system
+- When onboarding new developers who need implementation clarity
+- When a feature is complex with multiple interacting classes
+- When DB design has many relations and constraints
+- When the API will be consumed by external clients or mobile apps
+
+DESIGN PATTERNS COMMONLY APPLIED IN LLD:
+- Repository Pattern — abstracts DB access from business logic
+- Factory Pattern — object creation without exposing instantiation logic
+- Singleton Pattern — single shared instance (DB connection, config)
+- Observer Pattern — event-based notification between components
+- Strategy Pattern — interchangeable algorithms (payment methods, sorting)
+- Decorator Pattern — adding behavior to objects dynamically
+- CQRS — separating read and write models for performance
+
+DECISION RULE — WHAT PATTERN TO SUGGEST:
+- "user authentication" → Singleton for session, Strategy for auth method (JWT/OAuth)
+- "payment processing" → Strategy pattern (UPI, card, wallet as strategies)
+- "notifications" → Observer pattern
+- "data access layer" → Repository pattern always
+- "report generation" → Factory pattern for report types
+
+
+----------------------------------------------------------------
+SECTION 4: HLD vs LLD — COMPARISON
+----------------------------------------------------------------
+
+Aspect              | HLD                              | LLD
+--------------------|----------------------------------|----------------------------------
+Focus               | Architecture & components        | Classes, methods, DB schema
+Done by             | Architects, senior engineers     | Developers
+When                | Before coding starts             | After HLD, before coding
+Output              | Architecture diagram, data flow  | Class diagram, ERD, API contracts
+Abstraction level   | High (bird's eye view)           | Low (implementation detail)
+Design patterns     | Architecture patterns            | OOP design patterns
+Tools used          | Draw.io, Lucidchart, Miro        | UML tools, Swagger, dbdiagram.io
+Technology specific | No (tech-agnostic mostly)        | Yes (specific to chosen stack)
+Audience            | Stakeholders, architects, leads  | Developers implementing features
+
+
+----------------------------------------------------------------
+SECTION 5: HOW HLD AND LLD CONNECT
+----------------------------------------------------------------
+
+HLD defines → "We will have an Order Service"
+LLD defines → "Order Service has OrderController, OrderService, OrderRepository classes with these methods and this DB schema"
+
+HLD defines → "We will use Redis for caching"
+LLD defines → "Cache key format: user:{user_id}:cart, TTL: 900 seconds, invalidation on order placement"
+
+HLD defines → "We will use Kafka for async order events"
+LLD defines → "OrderPlacedEvent schema: {order_id, user_id, items[], timestamp}, consumed by NotificationService and InventoryService"
+
+RULE: Every component in HLD must have a corresponding LLD before implementation starts.
+
+
+----------------------------------------------------------------
+SECTION 6: SYSTEM DESIGN LEVELS IN AI-NATIVE PROJECTS
+----------------------------------------------------------------
+
+AI-native projects (RAG systems, agentic workflows, LLM-powered apps) require an extended HLD that includes:
+
+HLD ADDITIONS FOR AI PROJECTS:
+1. LLM Inference Layer — which model, hosted where (OpenAI, Ollama, Bedrock), how requests are routed
+2. Embedding Pipeline — which embedding model, batch vs real-time embedding, storage in vector DB
+3. RAG Architecture — retriever type (dense, sparse, hybrid), chunk size strategy, reranking
+4. Agent Design — ReAct, Reflection, or Planning pattern, tool list per agent, memory type
+5. AI Observability — tracing with Langfuse, token usage tracking, latency monitoring
+6. Human-in-the-loop — where approval gates are needed, how humans intervene
+
+LLD ADDITIONS FOR AI PROJECTS:
+1. Prompt templates — exact system prompt, user prompt structure, few-shot examples
+2. Chunk schema — chunk text, metadata fields, embedding dimensions
+3. Tool schema — tool name, description, input/output schema for each agent tool
+4. Fallback logic — what happens if LLM returns malformed output or times out
+5. Guardrails — content filtering, output validation, hallucination mitigation
+
+DECISION RULE — AI PROJECT SIGNALS:
+- "chatbot" → RAG architecture + LLM inference layer in HLD
+- "document QA" → RAG + PDF ingestion pipeline in HLD
+- "AI agent" → Agentic design + tool registry + memory layer in HLD
+- "recommendation" → Embedding pipeline + vector search in HLD
+- "code generation" → LLM inference + prompt engineering layer in HLD
+
+
+----------------------------------------------------------------
+SECTION 7: QUESTIONS THE AGENT MUST ASK vs INFER
+----------------------------------------------------------------
+
+INFER FROM PROJECT TOPIC (do not ask):
+- "delivery" / "booking" / "marketplace" → microservices + event-driven likely
+- "real-time" / "chat" / "live" → WebSocket + message queue
+- "AI" / "chatbot" / "assistant" → LLM inference + RAG
+- "payment" / "fintech" → security layer + compliance + audit logging
+- "social" / "feed" / "follow" → fan-out pattern + CDN + caching heavy
+
+ALWAYS ASK (necessary questions only):
+1. Expected scale — how many users? (1k / 10k / 100k / 1M+)
+   → determines if caching, sharding, CDN is needed
+2. MVP or production? 
+   → determines architecture complexity and timeline
+3. Team size?
+   → determines if microservices is practical or monolith is better
+
+NEVER ASK (agent should decide):
+- Which database to use → infer from domain
+- Whether to use caching → infer from scale answer
+- Which architecture pattern → infer from topic + scale
+- Whether HLD or LLD is needed → always do HLD first for non-trivial projects
+
+
+----------------------------------------------------------------
+END OF SYSTEM DESIGN LEVELS SOURCE MATERIAL
+================================================================

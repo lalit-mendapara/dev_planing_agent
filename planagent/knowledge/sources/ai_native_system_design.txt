@@ -1,0 +1,1005 @@
+================================================================
+AI-NATIVE SYSTEM DESIGN (NEW ERA 2024-2026) — FULL KNOWLEDGE SOURCE MATERIAL
+================================================================
+Category: AI-Native System Design
+Sub-categories: RAG Architecture, Agentic Design, Multi-Agent Systems,
+                LLM Inference Layer, AI Observability, Human-in-the-Loop
+Purpose: Source material for RAG vector DB — Plan & Architect Agent
+================================================================
+
+
+----------------------------------------------------------------
+SECTION 1: WHAT IS AI-NATIVE SYSTEM DESIGN
+----------------------------------------------------------------
+
+AI-native system design is the practice of architecting software systems where AI components
+(LLMs, embedding models, vector databases, agents) are first-class citizens of the architecture
+— not bolted-on features, but core structural elements that the entire system is designed around.
+
+Traditional system design adds AI as a feature.
+AI-native system design builds the system around AI capabilities.
+
+Key difference:
+- Traditional: "We have a web app, let's add a chatbot feature"
+- AI-native: "We are building an intelligent system — LLM reasoning, retrieval, and agents
+  are the core, everything else (API, DB, queues) supports them"
+
+AI-native systems require EXTENSIONS to standard HLD thinking:
+
+Standard HLD components still apply:
+→ Load Balancer, API Gateway, Caching, Message Queues, Databases, CDN
+
+AI-native additions:
+→ LLM Inference Layer
+→ Embedding Pipeline
+→ Vector Database
+→ RAG Architecture
+→ Agentic Design
+→ Multi-Agent Orchestration
+→ AI Observability (Langfuse, tracing)
+→ Human-in-the-Loop gates
+→ Prompt Management Layer
+→ Semantic Caching
+
+Six core AI-native patterns (2024-2026 era):
+1. RAG Architecture — Retrieval Augmented Generation
+2. Agentic Design — ReAct, Reflection, Planning patterns
+3. Multi-Agent Systems — Orchestrator + specialist agents
+4. LLM Inference Layer — model routing, hosting, optimization
+5. AI Observability — tracing, monitoring, evaluation
+6. Human-in-the-Loop — approval gates, oversight, intervention
+
+MASTER DECISION RULE FOR AI-NATIVE PROJECTS:
+- "chatbot with custom knowledge" → RAG Architecture
+- "AI that takes actions / uses tools" → Agentic Design
+- "complex AI workflow with multiple AI roles" → Multi-Agent System
+- "need to switch models, optimize cost" → LLM Inference Layer (LiteLLM)
+- "need to monitor AI quality and cost" → AI Observability (Langfuse)
+- "AI making critical decisions" → Human-in-the-Loop mandatory
+
+
+----------------------------------------------------------------
+SECTION 2: RAG ARCHITECTURE (RETRIEVAL AUGMENTED GENERATION)
+----------------------------------------------------------------
+
+DEFINITION:
+RAG is an AI architecture pattern that enhances LLM responses by retrieving relevant context
+from an external knowledge base before generating a response. Instead of relying solely on
+the LLM's training data, RAG grounds responses in specific, up-to-date, custom knowledge.
+
+Core principle: Retrieve relevant context → augment LLM prompt → generate grounded response.
+
+WHY RAG EXISTS:
+Problems with pure LLM:
+- Knowledge cutoff — LLM doesn't know recent information
+- Hallucination — LLM makes up answers when it doesn't know
+- No custom knowledge — LLM doesn't know your company's data
+- Context window limits — can't feed entire knowledge base into prompt
+
+RAG solves all of these by retrieving only the relevant chunks at query time.
+
+RAG FULL ARCHITECTURE:
+
+INGESTION PIPELINE (offline, runs once or on update):
+[Raw Documents (PDF, DOCX, TXT, HTML, CSV)]
+       ↓
+[Document Loader] — loads documents into memory
+       ↓
+[Text Splitter / Chunker] — splits into smaller chunks
+       ↓
+[Embedding Model] — converts each chunk into a vector (numerical representation)
+       ↓
+[Vector Database] — stores chunks + their vectors + metadata
+       ↓
+[Ingestion Complete]
+
+RETRIEVAL + GENERATION PIPELINE (online, runs per user query):
+[User Query]
+       ↓
+[Query Embedding] — embed the query using same embedding model
+       ↓
+[Vector Similarity Search] — find top-K most similar chunks in vector DB
+       ↓
+[Reranker (optional)] — reorder retrieved chunks by relevance
+       ↓
+[Prompt Construction] — system prompt + retrieved chunks + user query
+       ↓
+[LLM] — generates response grounded in retrieved context
+       ↓
+[Response to User]
+
+DETAILED COMPONENT BREAKDOWN:
+
+1. DOCUMENT LOADERS:
+   - PDF: PyPDF2, pdfplumber, Unstructured
+   - DOCX: python-docx, Unstructured
+   - HTML: BeautifulSoup, Unstructured
+   - CSV/Excel: pandas
+   - Web scraping: Playwright, Scrapy
+   - LangChain provides unified loaders for all formats
+   - Decision: Use Unstructured for mixed document types, specific loaders for known formats
+
+2. TEXT SPLITTING / CHUNKING:
+   Chunking strategy is one of the most critical RAG decisions.
+   Bad chunking = bad retrieval = bad answers regardless of LLM quality.
+
+   Chunking strategies:
+   a) Fixed Size Chunking:
+      - Split every N characters or tokens
+      - Simple, consistent chunk sizes
+      - Cons: may cut sentences mid-way
+      - Use when: uniform documents, simple use cases
+      - Typical size: 512-1024 tokens with 50-100 token overlap
+
+   b) Recursive Character Splitting:
+      - Split by paragraph → sentence → word in order of preference
+      - Preserves semantic boundaries better than fixed size
+      - LangChain RecursiveCharacterTextSplitter — most common choice
+      - Use when: general text documents
+
+   c) Semantic Chunking:
+      - Use embedding similarity to detect topic boundaries
+      - Split where semantic meaning changes
+      - Higher quality chunks, more expensive to compute
+      - Use when: high-quality retrieval is critical
+
+   d) Document Structure Chunking:
+      - Use document headings, sections as chunk boundaries
+      - Best for: structured documents (legal, technical, manuals)
+      - Preserves document hierarchy
+
+   e) Sentence Window Chunking:
+      - Store individual sentences but retrieve surrounding sentences as context
+      - Good retrieval precision with good context
+      - Use when: fine-grained retrieval with contextual window
+
+   CHUNK SIZE DECISION RULE:
+   - Short factual docs (FAQs) → small chunks (256-512 tokens)
+   - Long technical docs → medium chunks (512-1024 tokens)
+   - Legal/compliance docs → structure-based chunking
+   - Conversational context → sentence-level chunking
+   - Always add chunk overlap (10-20% of chunk size) to avoid cutting context
+
+   METADATA TO STORE WITH EACH CHUNK:
+   - source (filename, URL)
+   - page_number
+   - section_title
+   - document_type
+   - created_at / updated_at
+   - chunk_index
+   - custom tags (category, domain, language)
+   Metadata enables filtered retrieval — search only relevant document types.
+
+3. EMBEDDING MODELS:
+   An embedding model converts text into a dense vector (array of numbers) that captures
+   semantic meaning. Similar texts have vectors that are close in vector space.
+
+   Popular embedding models:
+   - OpenAI text-embedding-3-small — best balance of quality and cost, 1536 dimensions
+   - OpenAI text-embedding-3-large — highest quality, 3072 dimensions, higher cost
+   - sentence-transformers/all-MiniLM-L6-v2 — open source, fast, 384 dimensions
+   - BAAI/bge-large-en-v1.5 — high quality open source
+   - Cohere Embed v3 — strong multilingual support
+   - Nomic Embed — open source, 768 dimensions, strong performance
+
+   Decision rules:
+   - Cost-sensitive production → text-embedding-3-small (OpenAI)
+   - Open source / on-premise → BAAI/bge-large or nomic-embed-text
+   - Multilingual → Cohere Embed v3
+   - Fast local embedding → all-MiniLM-L6-v2
+   - Always use the SAME embedding model for ingestion and retrieval
+
+4. VECTOR DATABASES:
+   A vector database stores embeddings and enables fast similarity search using
+   Approximate Nearest Neighbor (ANN) algorithms.
+
+   Popular vector databases:
+   - Qdrant — open source, Rust-based, high performance, rich filtering, self-hostable
+   - Pinecone — fully managed, easy to use, expensive at scale
+   - Weaviate — open source, GraphQL API, built-in vectorization
+   - Chroma — lightweight, in-process, great for development
+   - PGVector — PostgreSQL extension, vector search inside existing Postgres
+   - Milvus — open source, high scale, production-grade
+   - FAISS — Facebook, in-memory, no persistence, great for prototyping
+
+   Decision rules:
+   - Production, self-hosted, high performance → Qdrant (your current choice, correct)
+   - Simple prototype / development → Chroma
+   - Already using PostgreSQL, small scale → PGVector
+   - Fully managed, no DevOps → Pinecone
+   - Billion-scale vectors → Milvus
+
+   Similarity search types:
+   - Cosine Similarity — measures angle between vectors (most common, use for normalized vectors)
+   - Dot Product — measures magnitude and angle (use for non-normalized)
+   - Euclidean Distance (L2) — geometric distance between vectors
+
+5. RETRIEVAL STRATEGIES:
+   a) Dense Retrieval (standard):
+      - Query embedded → similarity search in vector DB → top-K chunks returned
+      - Fast, good semantic understanding
+      - Weakness: may miss exact keyword matches
+
+   b) Sparse Retrieval (BM25):
+      - Traditional keyword-based search (TF-IDF, BM25)
+      - Good for exact keyword matches
+      - Weakness: no semantic understanding
+
+   c) Hybrid Retrieval (best):
+      - Combine dense + sparse retrieval
+      - Reciprocal Rank Fusion (RRF) to merge results
+      - Best of both worlds — semantic + keyword matching
+      - Qdrant supports hybrid search natively
+      - Use when: production RAG where retrieval quality is critical
+
+   d) Multi-Query Retrieval:
+      - LLM generates multiple versions of the user query
+      - Run retrieval for each version
+      - Merge and deduplicate results
+      - Use when: user queries are ambiguous or short
+
+   e) Contextual Compression:
+      - Retrieved chunks compressed/filtered to extract only relevant parts
+      - Reduces token usage in LLM context
+      - Use when: chunks are large and partially relevant
+
+6. RERANKING:
+   After initial retrieval (top-20), a reranker re-scores and reorders results to find
+   the truly most relevant chunks (top-5).
+
+   Why: Vector similarity is good but not perfect. Reranker adds a second pass of
+   relevance scoring using a cross-encoder model.
+
+   Tools: Cohere Rerank, BGE Reranker, FlashRank (local, free)
+   Pattern: Retrieve top-20 with vector search → rerank to top-5 → send to LLM
+   Decision rule: Any production RAG system → add reranking for better quality
+
+7. PROMPT CONSTRUCTION FOR RAG:
+   System prompt structure:
+   - Role definition
+   - Instruction to use only provided context
+   - Instruction to say "I don't know" if context doesn't contain answer
+   - Formatting instructions
+   - Context injection (retrieved chunks)
+   - User query
+
+   Example structure:
+   """
+   You are [role]. Answer questions based ONLY on the provided context.
+   If the context does not contain the answer, say "I don't know based on available information."
+   Do not make up information.
+
+   Context:
+   {retrieved_chunks}
+
+   Question: {user_query}
+   """
+
+RAG EVALUATION METRICS:
+- Retrieval Recall — did we retrieve all relevant chunks?
+- Retrieval Precision — are all retrieved chunks relevant?
+- Answer Faithfulness — is the answer grounded in retrieved context?
+- Answer Relevance — does the answer address the question?
+- Context Relevance — is the retrieved context relevant to the question?
+Tools: RAGAS framework for automated RAG evaluation
+
+ADVANCED RAG PATTERNS:
+- Self-RAG: LLM decides when to retrieve and evaluates its own outputs
+- Corrective RAG (CRAG): If retrieved docs are irrelevant, fall back to web search
+- GraphRAG: Build knowledge graph from documents, traverse graph for retrieval
+- Agentic RAG: Agent decides retrieval strategy dynamically based on query type
+
+DECISION RULE — WHEN TO USE RAG:
+- "chatbot that answers from company documents" → RAG
+- "document QA system" → RAG
+- "knowledge base assistant" → RAG
+- "AI that needs up-to-date information" → RAG + periodic reingestion
+- "legal/compliance document analysis" → RAG with structure-based chunking
+- "AI with general world knowledge only" → pure LLM, no RAG needed
+- "AI coding assistant" → RAG over codebase
+
+
+----------------------------------------------------------------
+SECTION 3: AGENTIC DESIGN
+----------------------------------------------------------------
+
+DEFINITION:
+An AI agent is a system that uses an LLM as its reasoning engine to autonomously decide
+what actions to take, execute those actions using tools, observe results, and repeat until
+the goal is achieved. Agents go beyond single LLM calls — they plan, act, and adapt.
+
+Core principle: LLM reasons → selects tool → executes tool → observes result → reasons again → repeat.
+
+WHY AGENTS EXIST:
+Single LLM call limitations:
+- Can only answer in one shot — no ability to take multi-step actions
+- Cannot interact with external systems (APIs, databases, files)
+- Cannot adapt based on intermediate results
+- Cannot handle complex multi-step workflows
+
+Agents solve this with:
+- Tool use — LLM can call functions, APIs, search engines
+- Memory — remember what happened in previous steps
+- Planning — decompose complex goals into sub-tasks
+- Reflection — evaluate own outputs and self-correct
+
+AGENTIC DESIGN PATTERNS:
+
+1. ReAct Pattern (Reasoning + Acting) — most fundamental:
+   Loop: [Thought] → [Action] → [Observation] → [Thought] → [Action] → [Observation] → [Final Answer]
+
+   - Thought: LLM reasons about what to do next
+   - Action: LLM calls a tool with specific inputs
+   - Observation: Tool returns result, LLM reads it
+   - Repeats until goal achieved or max iterations reached
+
+   Use when: Agent needs to use tools to answer questions or complete tasks
+   Example: User asks "What's the weather in Surat and should I carry an umbrella?"
+   → Thought: I need weather data for Surat
+   → Action: call weather_tool(city="Surat")
+   → Observation: "Rainy, 28°C, 80% precipitation"
+   → Thought: User should carry umbrella
+   → Final Answer: "It's rainy in Surat today, definitely carry an umbrella"
+
+2. Reflection Pattern:
+   - Agent generates output → critiques its own output → revises → repeat
+   - Improves output quality through self-evaluation
+   - Phases: Generate → Reflect → Revise → (repeat N times) → Output
+
+   Use when: Output quality is critical, first draft may be imperfect
+   Example: Code generation agent — writes code → checks for bugs → fixes → outputs
+
+3. Planning Pattern (Plan-and-Execute):
+   - Planner LLM creates a step-by-step plan
+   - Executor LLM executes each step one at a time
+   - Two separate LLM calls: one for planning, one for execution
+   - Separation allows using cheaper model for execution, expensive for planning
+
+   Use when: Complex multi-step tasks where upfront planning improves execution
+   Example: Research agent — plan steps to research a topic → execute each step
+
+4. Self-Ask Pattern:
+   - Agent breaks complex question into sub-questions
+   - Answers each sub-question using tools
+   - Combines answers to answer the original question
+   Use when: Complex questions requiring multiple information lookups
+
+5. Chain-of-Thought (CoT) with Tools:
+   - Agent reasons step by step before acting
+   - Extended thinking before tool calls
+   - Improves accuracy on complex reasoning tasks
+
+AGENT COMPONENTS:
+
+1. LLM (Brain): The reasoning engine. Decides what to do, interprets results.
+2. Tools: Functions the agent can call. Must have: name, description, input schema.
+3. Memory: What the agent remembers.
+4. Orchestrator: Controls the agent loop — when to stop, max iterations, error handling.
+
+TOOL DESIGN (critical for agent quality):
+Each tool must have:
+- name: clear, descriptive (snake_case)
+- description: precise explanation of what the tool does and when to use it
+  (LLM reads this to decide whether to call the tool)
+- input_schema: JSON Schema defining required and optional parameters
+- output_format: what the tool returns (LLM must understand the output)
+
+Tool description quality directly determines agent intelligence.
+Bad description → wrong tool selection → wrong actions → wrong results.
+
+Example tool definition:
+{
+  "name": "search_user_profile",
+  "description": "Retrieves the complete profile of a user by their user ID.
+                  Use this when you need to know a user's name, email, fitness goals,
+                  dietary restrictions, or subscription tier. Do not use for order history.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "user_id": {"type": "string", "description": "The unique user identifier"}
+    },
+    "required": ["user_id"]
+  }
+}
+
+AGENT MEMORY TYPES:
+
+1. In-Context Memory (short-term):
+   - Conversation history stored in LLM context window
+   - Lost after conversation ends
+   - Limited by context window size
+   - Use for: current conversation tracking
+
+2. External Memory (long-term):
+   - Store conversation summaries or key facts in DB or vector store
+   - Retrieved at start of new conversation
+   - Use for: personalization, remembering user preferences across sessions
+   - Implementation: Redis (key-value), PostgreSQL (structured), Vector DB (semantic search)
+
+3. Episodic Memory:
+   - Remember specific past interactions and their outcomes
+   - Use for: learning from past agent actions, avoiding repeated mistakes
+
+4. Semantic Memory:
+   - General knowledge store (your RAG knowledge base is this)
+   - Use for: domain knowledge retrieval
+
+AGENT STOPPING CONDITIONS:
+- Task completed successfully
+- Max iterations reached (prevent infinite loops)
+- LLM returns final answer signal
+- Error threshold exceeded
+- Human intervention requested
+
+LANGGRAPH FOR AGENTIC DESIGN (your stack):
+- LangGraph models agent logic as a directed graph (nodes + edges)
+- Nodes: individual processing steps (LLM call, tool call, condition check)
+- Edges: transitions between steps (conditional or unconditional)
+- State: shared data object passed between all nodes
+- Supports: cycles (loops), branching, parallel execution, human-in-the-loop
+- Best for: complex multi-step agentic workflows with conditional logic
+
+LangGraph state design:
+- Define TypedDict for state (messages, context, tool_results, iteration_count)
+- Each node reads from state and writes back to state
+- Conditional edges route based on state values (e.g., "is task complete?")
+
+DECISION RULE — WHEN TO USE AGENTIC DESIGN:
+- "AI that browses the web" → agent with web search tool
+- "AI that writes and executes code" → coding agent
+- "AI that manages tasks in external systems" → agent with API tools
+- "AI that answers complex multi-step questions" → ReAct agent
+- "AI that generates and self-improves content" → Reflection pattern
+- "AI personal assistant" → agent with calendar, email, task tools
+- "simple Q&A chatbot" → RAG only, no agent needed
+- "document summarization" → single LLM call, no agent needed
+
+
+----------------------------------------------------------------
+SECTION 4: MULTI-AGENT SYSTEMS
+----------------------------------------------------------------
+
+DEFINITION:
+A multi-agent system is an architecture where multiple AI agents, each with specialized
+roles and capabilities, collaborate to accomplish complex tasks that exceed what a single
+agent can reliably handle.
+
+Core principle: Divide complex tasks among specialist agents → orchestrate collaboration → achieve results
+no single agent could achieve alone.
+
+WHY MULTI-AGENT:
+Single agent limitations:
+- Context window overflow on very large tasks
+- One agent trying to be expert in everything = mediocre at everything
+- Serial processing — can't parallelize independent sub-tasks
+- Harder to maintain and debug a monolithic agent
+
+Multi-agent advantages:
+- Specialization — each agent is expert in its domain
+- Parallelism — independent agents work simultaneously
+- Modularity — add/remove agents without redesigning the system
+- Better quality — specialist agents outperform generalist agents
+
+MULTI-AGENT PATTERNS:
+
+1. Orchestrator-Specialist Pattern (most common):
+   Structure:
+   [User Request] → [Orchestrator Agent] → routes to → [Specialist Agent 1]
+                                        → routes to → [Specialist Agent 2]
+                                        → routes to → [Specialist Agent 3]
+                                        ← collects results ←
+                    [Orchestrator Agent] → [Final Response to User]
+
+   Orchestrator responsibilities:
+   - Understand overall task
+   - Decompose into sub-tasks
+   - Route sub-tasks to appropriate specialist agents
+   - Collect and synthesize results
+   - Handle errors and retries
+
+   Specialist agent responsibilities:
+   - Execute one specific type of task very well
+   - Return structured results to orchestrator
+
+   Example (your AIMaven agents):
+   Orchestrator → Plan & Architect Agent (HLD/LLD planning)
+              → Schema & DB Agent (database design)
+              → Code Generation Agent (feature coding)
+              → Fix Issue Agent (bug fixing)
+              → Auth & Security Agent (auth implementation)
+
+2. Supervisor Pattern:
+   - Supervisor agent monitors other agents' work
+   - Evaluates output quality
+   - Decides if work needs to be redone
+   - Can reassign tasks if an agent fails
+
+3. Peer-to-Peer (Collaborative) Pattern:
+   - Agents communicate directly with each other (no central orchestrator)
+   - Each agent can call other agents as tools
+   - More flexible but harder to control and debug
+   - Use when: agents have equal authority and need dynamic collaboration
+
+4. Sequential Pipeline Pattern:
+   - Output of Agent 1 → Input of Agent 2 → Input of Agent 3
+   - Each agent transforms or enriches the data
+   - Simple, predictable, easy to debug
+   - Use when: task has clear sequential steps
+
+   Example:
+   [Requirements Agent] → [Architecture Agent] → [Schema Agent] → [Code Agent]
+
+5. Parallel Execution Pattern:
+   - Orchestrator sends same task to multiple agents simultaneously
+   - Results merged (voting, synthesis, best-of-N selection)
+   - Use when: tasks are independent and can run concurrently
+   - Use when: need diverse perspectives or redundancy
+
+AGENT COMMUNICATION:
+- Shared State: all agents read/write to a central state object (LangGraph approach)
+- Message Passing: agents send structured messages to each other
+- Blackboard: shared memory space all agents read from and write to
+- Direct Tool Calls: one agent calls another agent as a tool
+
+INTER-AGENT PROTOCOL:
+Each agent should have a defined interface:
+- Input schema: what it accepts
+- Output schema: what it returns
+- Error handling: what it returns on failure
+- Timeout: maximum execution time
+
+MEMORY IN MULTI-AGENT SYSTEMS:
+- Individual agent memory: each agent tracks its own context
+- Shared memory: all agents access common state (LangGraph state)
+- Long-term storage: results persisted to DB for cross-session memory
+- Vector memory: past agent actions stored as embeddings for retrieval
+
+COMMON MULTI-AGENT TOOLS:
+- LangGraph — graph-based multi-agent orchestration (your stack)
+- AutoGen (Microsoft) — agent conversation framework
+- CrewAI — role-based multi-agent framework
+- Semantic Kernel — Microsoft SDK for agent orchestration
+- Custom implementation with FastAPI + Celery for distributed agents
+
+LANGGRAPH MULTI-AGENT DESIGN:
+- Each agent = one or more nodes in the graph
+- Orchestrator = conditional edge logic + routing node
+- State shared across all agents
+- Parallel agents: use Send API for parallel node execution
+- Human-in-the-loop: interrupt graph at specific nodes for human review
+
+DECISION RULE — WHEN TO USE MULTI-AGENT:
+- "complex AI system with 3+ distinct AI roles" → Multi-Agent
+- "tasks that can be parallelized" → Multi-Agent with parallel pattern
+- "single agent context overflow" → decompose into multi-agent
+- "need specialist quality for each domain" → Multi-Agent
+- "simple chatbot or Q&A" → single agent or RAG, not multi-agent
+- "one well-defined task" → single agent sufficient
+
+
+----------------------------------------------------------------
+SECTION 5: LLM INFERENCE LAYER
+----------------------------------------------------------------
+
+DEFINITION:
+The LLM inference layer is the architectural component that manages all interactions with
+LLM models — routing requests to the right model, optimizing costs, handling failures,
+caching responses, and abstracting model provider differences.
+
+Core principle: Decouple application logic from specific LLM providers → flexibility, cost control, reliability.
+
+WHY A DEDICATED INFERENCE LAYER:
+Without it:
+- Application code directly calls OpenAI API → vendor lock-in
+- No fallback if OpenAI is down
+- No cost optimization (always using expensive models)
+- No request routing (always using same model for all tasks)
+- No semantic caching
+
+With inference layer:
+- Switch models without changing application code
+- Route simple tasks to cheap models, complex tasks to powerful models
+- Fallback to alternative provider if primary is down
+- Semantic caching to avoid redundant LLM calls
+- Unified logging and cost tracking
+
+LITELLM — THE STANDARD INFERENCE LAYER (your stack):
+LiteLLM provides a unified API interface for 100+ LLM providers.
+- Call OpenAI, Anthropic, Gemini, Mistral, Ollama with the same code
+- Automatic fallback — if primary model fails, try backup model
+- Load balancing across multiple API keys or model deployments
+- Cost tracking per request
+- Async support
+
+LiteLLM usage:
+completion(model="gpt-4o", messages=[...])
+completion(model="anthropic/claude-3-5-sonnet", messages=[...])
+completion(model="ollama/llama3", messages=[...])
+Same interface, different models.
+
+MODEL ROUTING STRATEGIES:
+
+1. Task-Based Routing:
+   - Route based on task complexity or type
+   - Simple tasks (classification, extraction) → cheap fast model (GPT-4o-mini, Haiku)
+   - Complex tasks (planning, reasoning) → powerful model (GPT-4o, Claude Sonnet)
+   - Code generation → code-specialized model (Claude Sonnet, GPT-4o)
+   Decision: Define task categories and map to models in config
+
+2. Cost-Based Routing:
+   - Monitor token usage per request
+   - Route to cheaper model when within budget
+   - Escalate to expensive model only when needed
+   - Use LiteLLM budget manager
+
+3. Latency-Based Routing:
+   - Route to fastest available model when latency is critical
+   - Route to more powerful model when quality matters more than speed
+
+4. Fallback Routing:
+   - Primary model → if fails → secondary model → if fails → tertiary
+   - Example: GPT-4o → Claude Sonnet → Gemini Pro
+   - LiteLLM handles this automatically with fallbacks config
+
+MODEL SELECTION DECISION TABLE:
+Task                        | Recommended Model
+----------------------------|------------------------------------------
+Simple classification       | GPT-4o-mini, Claude Haiku
+Complex reasoning/planning  | GPT-4o, Claude Sonnet/Opus
+Code generation             | Claude Sonnet, GPT-4o
+Embeddings                  | text-embedding-3-small (OpenAI)
+Long document processing    | Claude (200K context), Gemini (1M context)
+Local/private data          | Ollama (Llama3, Mistral) — runs locally
+Multimodal (image+text)     | GPT-4o, Claude Sonnet (vision)
+Cost-sensitive production   | GPT-4o-mini, Claude Haiku
+
+LLM INFERENCE OPTIMIZATION TECHNIQUES:
+
+1. Semantic Caching:
+   - Cache LLM responses for semantically similar queries
+   - Not exact match — if new query means the same thing, return cached response
+   - Store: {query_embedding, response} in Redis or vector DB
+   - Similarity threshold (e.g., cosine > 0.95) → cache hit
+   - Saves significant cost for repeated/similar queries
+
+2. Prompt Caching:
+   - Cache the processed prompt prefix at the model provider level
+   - Anthropic Claude supports prompt caching — cache system prompt
+   - Reduces input token cost for repeated system prompts (up to 90% reduction)
+   - Use when: long system prompt used in every request
+
+3. Batching:
+   - Combine multiple requests into one API call
+   - Reduces API overhead
+   - Use for: batch processing of documents, async workloads
+
+4. Streaming:
+   - Stream LLM response token by token
+   - Improves perceived latency (user sees response appearing)
+   - Use for: any user-facing chat interface
+   - Implementation: Server-Sent Events (SSE) from FastAPI
+
+5. Token Optimization:
+   - Minimize prompt length without losing quality
+   - Remove redundant instructions
+   - Use shorter few-shot examples
+   - Compress context (summarize conversation history)
+
+6. Context Window Management:
+   - Sliding window: keep only last N messages in context
+   - Summarization: summarize older messages, keep summary in context
+   - Selective retrieval: only include relevant past context
+
+HOSTING OPTIONS:
+1. API (Cloud): OpenAI, Anthropic, Google — easiest, pay per token
+2. Self-hosted open source: Ollama (local dev), vLLM (production), TGI (Hugging Face)
+3. Cloud-hosted open source: Together AI, Groq, Fireworks AI — cheaper than OpenAI
+4. On-premise GPU: For data privacy, large scale, regulated industries
+
+DECISION RULE — LLM INFERENCE LAYER:
+- Any production AI system → LiteLLM mandatory for model flexibility
+- Cost-sensitive → model routing based on task complexity
+- User-facing chat → streaming mandatory
+- High repeated query volume → semantic caching mandatory
+- Private/sensitive data → Ollama or self-hosted model
+- Long documents → Claude or Gemini for large context window
+
+
+----------------------------------------------------------------
+SECTION 6: AI OBSERVABILITY
+----------------------------------------------------------------
+
+DEFINITION:
+AI observability is the practice of monitoring, tracing, and evaluating AI system behavior —
+including LLM inputs/outputs, token usage, latency, costs, retrieval quality, and agent
+decision paths — to understand, debug, and improve AI systems in production.
+
+Core principle: You cannot improve what you cannot measure. AI systems need specialized
+observability beyond traditional APM tools.
+
+WHY AI OBSERVABILITY IS DIFFERENT:
+Traditional observability (logs, metrics, traces) is not enough for AI because:
+- LLM responses are probabilistic — same input can give different outputs
+- Quality is subjective — need to evaluate if response was actually good
+- Token costs accumulate — need per-request cost tracking
+- Agent reasoning paths need to be traced across multiple steps
+- Retrieval quality in RAG needs separate evaluation
+- Prompt changes have non-obvious effects on output quality
+
+AI OBSERVABILITY COMPONENTS:
+
+1. LLM Tracing:
+   - Capture every LLM call: input prompt, output, model, tokens, latency, cost
+   - Trace multi-step agent execution end-to-end
+   - Visualize the full reasoning chain of an agent
+   - Debug which step failed in a multi-agent pipeline
+
+2. Token Usage Tracking:
+   - Track input tokens, output tokens, total tokens per request
+   - Calculate cost per request, per user, per feature
+   - Set budget alerts when costs exceed thresholds
+   - Identify expensive prompts to optimize
+
+3. Latency Monitoring:
+   - Track time-to-first-token (TTFT) — perceived latency
+   - Track total generation time
+   - Identify slow steps in agent pipelines
+   - Compare latency across models
+
+4. Quality Evaluation:
+   - Human feedback: thumbs up/down, ratings
+   - Automated evaluation: LLM-as-judge (use LLM to evaluate another LLM's output)
+   - RAG-specific metrics: retrieval recall, answer faithfulness (RAGAS)
+   - A/B testing: compare two prompt versions or models
+
+5. Prompt Management:
+   - Version control for prompts
+   - Track which prompt version produced which outputs
+   - Roll back to previous prompt if quality degrades
+   - Test new prompts before deploying to production
+
+6. Dataset Management:
+   - Collect production queries as evaluation dataset
+   - Build golden dataset (question + expected answer pairs)
+   - Run automated evaluation against golden dataset on every prompt change
+
+LANGFUSE — THE STANDARD AI OBSERVABILITY TOOL (your stack):
+Langfuse is an open-source LLM observability platform.
+
+Features:
+- Tracing: trace entire LLM pipeline from user input to final output
+- Spans: individual steps within a trace (retrieval, LLM call, tool call)
+- Scores: attach quality scores to traces (human or automated)
+- Prompt management: version prompts, A/B test
+- Cost tracking: automatic token cost calculation
+- Dashboard: visualize traces, costs, latency, quality over time
+- Self-hostable: run on your own infrastructure
+
+Langfuse integration with LangChain/LangGraph:
+- LangfuseCallbackHandler — automatic tracing of all LangChain calls
+- @observe decorator — manually trace any Python function
+- langfuse.score() — attach quality score to a trace
+
+KEY METRICS TO TRACK IN AI OBSERVABILITY:
+- Latency (P50, P95, P99) per LLM call and per pipeline
+- Token cost per request and per feature
+- Cache hit rate (semantic cache effectiveness)
+- Retrieval precision and recall (for RAG)
+- User satisfaction score (thumbs up/down rate)
+- Error rate (LLM failures, tool failures, timeouts)
+- Hallucination rate (from automated evaluation)
+
+AI OBSERVABILITY ARCHITECTURE:
+[LLM Application (LangGraph / FastAPI)]
+       ↓ (instrumented with LangfuseCallbackHandler or @observe)
+[Langfuse SDK] → sends traces async → [Langfuse Server]
+                                            ↓
+                                    [Langfuse Dashboard]
+                                    (traces, costs, scores, prompts)
+
+DECISION RULE — AI OBSERVABILITY:
+- Any production AI system → Langfuse mandatory
+- RAG system → track retrieval quality metrics
+- Agentic system → trace every agent step
+- Cost-sensitive → token cost tracking mandatory
+- Quality-critical → automated LLM-as-judge evaluation
+- Development only → can use LangSmith or simple logging temporarily
+
+
+----------------------------------------------------------------
+SECTION 7: HUMAN-IN-THE-LOOP (HITL)
+----------------------------------------------------------------
+
+DEFINITION:
+Human-in-the-Loop is a design pattern where human oversight, review, and approval is
+integrated at specific points in an AI workflow — particularly at decision points where
+autonomous AI action could have significant consequences.
+
+Core principle: AI does the heavy lifting, humans maintain control over critical decisions.
+
+WHY HUMAN-IN-THE-LOOP:
+AI systems can:
+- Hallucinate — generate confidently wrong information
+- Make decisions with unintended consequences
+- Misinterpret ambiguous instructions
+- Act outside intended boundaries
+
+Human-in-the-loop prevents:
+- AI autonomously taking irreversible harmful actions
+- High-stakes decisions made without human review
+- AI drift outside intended behavior over time
+- Loss of user/stakeholder trust
+
+TYPES OF HUMAN INTERVENTION:
+
+1. Approval Gates:
+   - AI proposes an action → human reviews → approves or rejects → AI proceeds or stops
+   - Synchronous: AI waits for human decision before continuing
+   - Use when: action has significant consequences (sending email to 10,000 users,
+     deleting database records, making financial transactions)
+
+2. Review and Edit:
+   - AI generates output → human reviews → edits if needed → confirmed output used
+   - Use when: output quality is critical but AI does most of the work
+   - Example: AI writes contract draft → lawyer reviews and edits → contract sent
+
+3. Exception Handling:
+   - AI handles routine cases autonomously → escalates edge cases to humans
+   - Use when: most cases are routine but some require human judgment
+   - Example: AI handles standard customer queries → escalates complex complaints
+
+4. Feedback Loop:
+   - Human rates or corrects AI outputs → feedback used to improve system
+   - Use when: continuous improvement of AI quality is needed
+   - Implementation: thumbs up/down, star rating, manual correction stored as training data
+
+5. Active Monitoring:
+   - Human monitors AI activity in real-time without blocking it
+   - Can intervene if AI is going off-track
+   - Use when: AI acts autonomously but human needs situational awareness
+
+HUMAN-IN-THE-LOOP IN LANGGRAPH:
+LangGraph has built-in support for human-in-the-loop:
+- interrupt_before: pause graph execution before a specific node
+- interrupt_after: pause graph execution after a specific node
+- graph.invoke() with thread_id: resume execution after human input
+- Checkpoint: graph state saved at interrupt point, resumed after approval
+
+Implementation pattern:
+1. Agent runs to decision node
+2. Graph pauses (interrupt)
+3. State saved to checkpointer (PostgreSQL or Redis)
+4. Human notified (email, Slack, dashboard)
+5. Human reviews and approves/rejects
+6. Graph resumed with human decision injected into state
+
+WHEN TO ADD HUMAN-IN-THE-LOOP:
+
+Mandatory:
+- AI taking irreversible actions (deleting data, sending mass communications)
+- Financial decisions above a threshold
+- Medical or legal advice being acted upon
+- Agent has access to sensitive external systems (email, CRM, payment)
+- Regulated domains (healthcare, finance, legal)
+
+Recommended:
+- First N runs of a new agent in production
+- When agent confidence score is below threshold
+- When action affects more than N users or records
+- When agent encounters an edge case it wasn't designed for
+
+Not needed:
+- Internal data retrieval (no action taken)
+- Read-only AI responses (chatbot answering questions)
+- Low-stakes automated tasks (categorizing internal tickets)
+
+NOTIFICATION PATTERNS FOR HUMAN REVIEW:
+- Email notification with approve/reject links
+- Slack message with action buttons
+- Dashboard queue where humans review pending approvals
+- Mobile push notification for urgent approvals
+
+HITL DESIGN PRINCIPLES:
+1. Make the AI's reasoning visible — show WHY the AI wants to take this action
+2. Make approval frictionless — one click approve/reject, not complex forms
+3. Set time limits — if no human response in N minutes, escalate or abort
+4. Log all decisions — track who approved what and when
+5. Learn from rejections — use rejected actions to improve agent
+
+DECISION RULE — HUMAN-IN-THE-LOOP:
+- "AI sends emails on behalf of user" → HITL approval mandatory
+- "AI deletes or modifies production data" → HITL mandatory
+- "AI makes financial transaction" → HITL mandatory
+- "AI coding agent deploys to production" → HITL before deployment
+- "AI reads and summarizes documents" → NO HITL needed
+- "AI answers customer questions" → NO HITL (maybe feedback loop)
+- "AI suggests edits to document" → HITL for review/edit pattern
+
+
+----------------------------------------------------------------
+SECTION 8: FULL AI-NATIVE SYSTEM ARCHITECTURE
+----------------------------------------------------------------
+
+Complete architecture for a production AI-native system
+(combining all components):
+
+CLIENT LAYER:
+[Web App (React)] / [Mobile App] / [API Client]
+       ↓
+GATEWAY LAYER:
+[API Gateway] — auth, rate limiting, routing
+       ↓
+APPLICATION LAYER:
+[FastAPI Backend]
+  ├── [RAG Router] — handles knowledge retrieval queries
+  ├── [Agent Router] — handles agentic task requests
+  └── [Standard API Router] — handles CRUD operations
+       ↓
+AI PROCESSING LAYER:
+[LLM Inference Layer (LiteLLM)]
+  ├── [Model Router] — routes to right model per task
+  ├── [Semantic Cache (Redis)] — caches LLM responses
+  └── [Fallback Handler] — switches model on failure
+
+[RAG Pipeline]
+  ├── [Query Embedding] → [Vector Search (Qdrant)] → [Reranker]
+  └── [Prompt Builder] → [LLM Call] → [Response Parser]
+
+[Agent Orchestration (LangGraph)]
+  ├── [Orchestrator Agent] — plans and routes
+  ├── [Specialist Agent 1] — domain expert
+  ├── [Specialist Agent 2] — domain expert
+  └── [Tool Registry] — all available tools
+
+ASYNC PROCESSING LAYER:
+[Celery Workers]
+  ├── [Document Ingestion Worker] — chunk, embed, store
+  ├── [Long AI Task Worker] — runs heavy agent tasks
+  └── [Notification Worker] — sends emails, Slack
+[Redis] — task queue broker
+
+DATA LAYER:
+[PostgreSQL] — structured data, user data, agent state
+[Qdrant] — vector embeddings for RAG
+[Redis] — cache, sessions, task queue
+
+OBSERVABILITY LAYER:
+[Langfuse] — LLM tracing, cost, quality
+[Application Logs] — structured JSON logs
+[Metrics] — Prometheus + Grafana
+
+HUMAN-IN-THE-LOOP:
+[Approval Dashboard] — human review queue
+[LangGraph Checkpointer (PostgreSQL)] — paused agent states
+
+
+----------------------------------------------------------------
+SECTION 9: QUESTIONS THE AGENT MUST ASK vs INFER
+----------------------------------------------------------------
+
+INFER FROM PROJECT TOPIC (do not ask):
+- "chatbot" / "assistant" / "QA" → RAG Architecture
+- "AI that takes actions" / "AI agent" → Agentic Design (ReAct)
+- "multiple AI roles" / "AI pipeline" → Multi-Agent System
+- "switch models" / "cost optimization" → LiteLLM Inference Layer
+- "production AI" → Langfuse observability mandatory
+- "AI deletes / sends / modifies" → Human-in-the-Loop mandatory
+- "document ingestion" → async ingestion via Celery worker
+- "AI response streaming" → SSE streaming in FastAPI mandatory
+- "repeated similar queries" → semantic caching in Redis
+
+ALWAYS ASK:
+1. What data does the AI need to know? (determines RAG vs pure LLM)
+2. What actions can the AI take? (determines agent tool list)
+3. Are any actions irreversible or high-stakes? (determines HITL need)
+
+NEVER ASK:
+- Which LLM to use → agent recommends based on task type and budget
+- Whether to add observability → always Langfuse in production
+- Whether to cache LLM responses → always for cost optimization
+- Which vector DB → Qdrant for production, Chroma for prototype
+
+
+----------------------------------------------------------------
+END OF AI-NATIVE SYSTEM DESIGN SOURCE MATERIAL
+================================================================

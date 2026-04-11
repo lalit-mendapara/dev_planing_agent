@@ -219,6 +219,18 @@ The agent creates its output **inside** whichever project you point it at.
 
 ---
 
+## Knowledge Base
+
+The agent ships with a **pre-built system design knowledge base** (architecture patterns, scaling strategies, design best practices). No setup needed — it's always available during conversations.
+
+To regenerate the pre-built index after editing source files:
+
+```bash
+python -m planagent.knowledge.prebuild
+```
+
+---
+
 ## Tech Stack
 
 - **AI Model**: Llama 3.1 via Ollama (runs locally, no API keys)

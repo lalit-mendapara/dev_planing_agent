@@ -4,6 +4,7 @@ planagent/__init__.py
 planagent/cli.py
 planagent/context_reader.py
 planagent/conversation_manager.py
+planagent/conversation_store.py
 planagent/llm.py
 planagent/output_writer.py
 planagent/plan_generator.py
@@ -18,8 +19,18 @@ planagent.egg-info/requires.txt
 planagent.egg-info/top_level.txt
 planagent/guardrails/__init__.py
 planagent/guardrails/guard.py
+planagent/knowledge/__init__.py
+planagent/knowledge/build_index.py
+planagent/knowledge/chunker.py
+planagent/knowledge/embedder.py
+planagent/knowledge/memory.py
+planagent/knowledge/prebuild.py
+planagent/knowledge/retriever.py
+planagent/knowledge/vectorstore.py
 tests/test_context_reader.py
 tests/test_conversation.py
+tests/test_conversation_store.py
+tests/test_knowledge.py
 tests/test_output.py
 tests/test_plan_manager.py
 tests/test_ui.py

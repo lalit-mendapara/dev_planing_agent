@@ -32,9 +32,17 @@ class ApiEndpoint(BaseModel):
     auth_required: bool = False
 
 
+class ExistingFeature(BaseModel):
+    name: str
+    status: str = "implemented"
+    location: str = ""
+    details: str = ""
+
+
 class ArchitecturePlan(BaseModel):
     project_name: str = "Untitled"
     description: str = ""
+    existing_features: list[ExistingFeature] = Field(default_factory=list)
     tech_stack: TechStack = Field(default_factory=TechStack)
     modules_v1: list[Module] = Field(default_factory=list)
     modules_v2: list[Module] = Field(default_factory=list)
@@ -50,10 +58,20 @@ class ArchitecturePlan(BaseModel):
 PLAN_PROMPT = """You are a backend architecture planner. Based on the structured project requirements below,
 generate a complete backend architecture plan. Return ONLY valid JSON — no markdown fences, no explanation.
 
+CRITICAL — EXISTING FUNCTIONALITY:
+If "EXISTING FEATURES (ALREADY IMPLEMENTED)" is listed below, these features ALREADY EXIST in the codebase.
+You MUST:
+1. List them in the "existing_features" array (so the developer knows what's already built)
+2. Do NOT create duplicate modules, endpoints, or entities for features that already exist
+3. Only plan NEW functionality that doesn't overlap with existing features
+4. If a requested feature partially overlaps (e.g., user wants "social login" but basic "login" exists),
+   mention the existing part in existing_features and only plan the NEW delta
+
 Required JSON structure:
 {
   "project_name": "...",
   "description": "...",
+  "existing_features": [{"name": "...", "status": "implemented", "location": "file/path.py::function_or_class", "details": "brief description of what exists"}],
   "tech_stack": {
     "language": "...", "framework": "...", "database": "...",
     "auth": "...", "cache": "...", "queue": "...", "other_tools": [...]
@@ -64,6 +82,9 @@ Required JSON structure:
   "folder_structure": ["/app", "/app/users", "..."],
   "design_patterns": ["Repository pattern", "Service layer"]
 }
+
+REMEMBER: modules_v1, modules_v2, and api_endpoints should contain ONLY NEW things to build.
+existing_features should contain everything the scan detected as already implemented.
 
 PROJECT REQUIREMENTS:
 {requirements}"""
@@ -103,7 +124,196 @@ def _build_requirements(state: dict) -> str:
     if tier1:
         parts.append(f"\nExisting project context:\n{tier1}")
 
+    # Existing features with locations — critical for avoiding duplication
+    existing_ctx = _build_existing_features_context(state)
+    if existing_ctx:
+        parts.append(existing_ctx)
+
+    # RAG: inject architecture knowledge for plan generation
+    rag_chunks = state.get("rag_context", [])
+    if rag_chunks:
+        try:
+            from planagent.knowledge.retriever import format_chunks_for_prompt
+            rag_text = format_chunks_for_prompt(rag_chunks, max_chars=1500)
+            if rag_text:
+                parts.append(f"\nArchitecture reference material:\n{rag_text}")
+        except Exception:
+            pass
+
+    # Full conversation context from ConversationStore — gives the LLM
+    # complete context at plan generation time (not sent during conversation)
+    store = state.get("_conversation_store")
+    if store is not None:
+        full_convo = store.get_full_context_for_plan()
+        if full_convo:
+            parts.append(f"\nFull conversation transcript:\n{full_convo}")
+
     return "\n".join(parts) if parts else "No structured requirements collected."
+
+
+def _build_existing_features_context(state: dict) -> str:
+    """Build a detailed summary of existing functionality with file locations.
+    This is injected into the plan prompt so the LLM avoids duplicating features.
+    Covers ALL types: auth, payments, models, routes, background tasks, etc."""
+    discovered = []
+
+    # Primary source: discovered_features from context_reader scan
+    ex = state.get("existing_summary", {})
+    if ex:
+        discovered = ex.get("discovered_features", [])
+
+    # Fallback: check context_index directly
+    if not discovered:
+        idx = state.get("context_index", {})
+        if idx:
+            discovered = idx.get("discovered_features", [])
+
+    if not discovered:
+        return ""
+
+    # Only include medium/high confidence features (low = too speculative)
+    relevant = [f for f in discovered if f.get("confidence") in ("high", "medium")]
+    if not relevant:
+        return ""
+
+    lines = ["\n--- EXISTING FEATURES (ALREADY IMPLEMENTED) ---"]
+    lines.append("These features are ALREADY in the codebase. Do NOT duplicate them.")
+
+    for feat in relevant:
+        name = feat["name"]
+        confidence = feat["confidence"]
+        evidence = feat.get("evidence", [])
+        locations = feat.get("locations", [])
+
+        header = f"\n[{confidence.upper()}] {name}"
+        lines.append(header)
+
+        # Show structured locations with file paths
+        if locations:
+            for loc in locations[:5]:
+                loc_type = loc.get("type", "")
+                if loc_type == "route":
+                    fn = loc.get("function", "")
+                    path = loc.get("path", "")
+                    file = loc.get("file", "")
+                    line_num = loc.get("line", 0)
+                    ref = f"  - Route: {path}"
+                    if file:
+                        ref += f" -> {file}"
+                        if fn:
+                            ref += f"::{fn}"
+                        if line_num:
+                            ref += f" (line {line_num})"
+                    lines.append(ref)
+                elif loc_type == "model":
+                    file = loc.get("file", "")
+                    model_name = loc.get("name", "")
+                    fields = loc.get("fields", [])
+                    line_num = loc.get("line", 0)
+                    ref = f"  - Model: {model_name}"
+                    if fields:
+                        ref += f"({', '.join(fields[:6])})"
+                    if file:
+                        ref += f" in {file}"
+                    if line_num:
+                        ref += f" (line {line_num})"
+                    lines.append(ref)
+                elif loc_type == "function":
+                    file = loc.get("file", "")
+                    fn_name = loc.get("name", "")
+                    line_num = loc.get("line", 0)
+                    ref = f"  - Function: {fn_name}"
+                    if file:
+                        ref += f" in {file}"
+                    if line_num:
+                        ref += f" (line {line_num})"
+                    lines.append(ref)
+                elif loc_type == "folder":
+                    lines.append(f"  - Module: {loc.get('path', '')}")
+                elif loc_type == "import":
+                    lines.append(f"  - Package: {loc.get('package', '')}")
+                elif loc_type == "env":
+                    lines.append(f"  - Config: {loc.get('key', '')}")
+                elif loc_type in ("decorator", "enum"):
+                    file = loc.get("file", "")
+                    dec_name = loc.get("name", "")
+                    ref = f"  - {loc_type.title()}: {dec_name}"
+                    if file:
+                        ref += f" in {file}"
+                    lines.append(ref)
+        elif evidence:
+            for ev in evidence[:3]:
+                lines.append(f"  - {ev}")
+
+    lines.append("--- END EXISTING FEATURES ---")
+    return "\n".join(lines)
+
+
+def _inject_existing_features_from_scan(state: dict) -> list[dict]:
+    """Fallback: build existing_features list from scan data when LLM omits them.
+    Ensures the developer always sees what's already implemented."""
+    discovered = []
+    ex = state.get("existing_summary", {})
+    if ex:
+        discovered = ex.get("discovered_features", [])
+    if not discovered:
+        idx = state.get("context_index", {})
+        if idx:
+            discovered = idx.get("discovered_features", [])
+
+    result = []
+    for feat in discovered:
+        if feat.get("confidence") not in ("high", "medium"):
+            continue
+        entry = {"name": feat["name"], "status": "implemented", "location": "", "details": ""}
+
+        # Build location string from structured locations
+        locations = feat.get("locations", [])
+        loc_parts = []
+        detail_parts = []
+        for loc in locations[:3]:
+            loc_type = loc.get("type", "")
+            if loc_type == "route":
+                file = loc.get("file", "")
+                fn = loc.get("function", "")
+                path = loc.get("path", "")
+                if file and fn:
+                    loc_parts.append(f"{file}::{fn}")
+                elif file:
+                    loc_parts.append(file)
+                if path:
+                    detail_parts.append(f"route {path}")
+            elif loc_type == "model":
+                file = loc.get("file", "")
+                name = loc.get("name", "")
+                if file:
+                    loc_parts.append(f"{file}::{name}")
+                fields = loc.get("fields", [])
+                if fields:
+                    detail_parts.append(f"model {name}({', '.join(fields[:4])})")
+            elif loc_type == "function":
+                file = loc.get("file", "")
+                name = loc.get("name", "")
+                if file:
+                    loc_parts.append(f"{file}::{name}")
+            elif loc_type == "folder":
+                loc_parts.append(loc.get("path", ""))
+            elif loc_type == "import":
+                detail_parts.append(f"uses {loc.get('package', '')}")
+
+        if loc_parts:
+            entry["location"] = ", ".join(dict.fromkeys(loc_parts))  # dedupe, preserve order
+        if detail_parts:
+            entry["details"] = "; ".join(dict.fromkeys(detail_parts))
+        else:
+            # Fallback to evidence strings
+            evidence = feat.get("evidence", [])
+            if evidence:
+                entry["details"] = "; ".join(evidence[:2])
+
+        result.append(entry)
+
+    return result
 
 
 def generate_plan(state: dict) -> dict:
@@ -131,7 +341,14 @@ def generate_plan(state: dict) -> dict:
 
             # Validate with pydantic
             plan = ArchitecturePlan(**data)
-            state["proposal"] = plan.model_dump()
+            proposal = plan.model_dump()
+
+            # Ensure existing features are always populated from scan
+            # even if LLM didn't return them (fallback injection)
+            if not proposal.get("existing_features"):
+                proposal["existing_features"] = _inject_existing_features_from_scan(state)
+
+            state["proposal"] = proposal
             return state
 
         except (json.JSONDecodeError, ValidationError) as e:
@@ -194,5 +411,20 @@ def display_proposal(state: dict) -> None:
     folders = plan.get("folder_structure", [])
     if folders:
         console.print(f"[bold]Folder structure:[/bold] {len(folders)} directories")
+
+    # Existing features (already implemented)
+    existing = plan.get("existing_features", [])
+    if existing:
+        console.print(f"\n[bold green]Existing features ({len(existing)}):[/bold green]")
+        for ef in existing:
+            name = ef["name"] if isinstance(ef, dict) else ef.name
+            loc = ef.get("location", "") if isinstance(ef, dict) else ef.location
+            details = ef.get("details", "") if isinstance(ef, dict) else ef.details
+            line = f"  [green]✓[/green] {name}"
+            if loc:
+                line += f" [dim]({loc})[/dim]"
+            if details:
+                line += f" — {details}"
+            console.print(line)
 
     console.print("[bold purple]" + "_" * 50 + "[/bold purple]\n")

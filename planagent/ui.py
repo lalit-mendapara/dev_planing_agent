@@ -43,6 +43,12 @@ console = Console(theme=THEME)
 OPTIONS_PATTERN = re.compile(
     r"```options\s*(.*?)\s*```", re.DOTALL
 )
+OPTIONS_MULTI_PATTERN = re.compile(
+    r"```options-multi\s*(.*?)\s*```", re.DOTALL
+)
+
+BACK_COMMAND = "/back"
+CODE_BLOCK_PATTERN = re.compile(r"```[\s\S]*?```", re.MULTILINE)
 
 BANNER = r"""
  ╔═══════════════════════════════════════════════════╗
@@ -57,21 +63,40 @@ BANNER = r"""
 # Parse options from LLM response
 # ---------------------------------------------------------------------------
 
-def parse_agent_response(raw: str) -> tuple[str, list[str]]:
-    """Split LLM output into (message_text, options_list).
+def parse_agent_response(raw: str) -> tuple[str, list[str], bool]:
+    """Split LLM output into (message_text, options_list, multi_select).
 
     The LLM is instructed to embed options like:
         ```options
         ["Option A description", "Option B description", "Option C description"]
         ```
+    Or for multi-select (user can pick more than one):
+        ```options-multi
+        ["Feature A", "Feature B", "Feature C", "Feature D"]
+        ```
 
     Returns:
         message_text: The response with the options block stripped out.
         options: List of option strings (may be empty).
+        multi_select: True if options-multi block was used.
     """
+    # Check multi-select first (more specific pattern)
+    multi_match = OPTIONS_MULTI_PATTERN.search(raw)
+    if multi_match:
+        options_raw = multi_match.group(1).strip()
+        message_text = OPTIONS_MULTI_PATTERN.sub("", raw).strip()
+        try:
+            options = json.loads(options_raw)
+            if isinstance(options, list) and all(isinstance(o, str) for o in options):
+                return message_text, options[:6], True  # cap at 6 for multi
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return raw.strip(), [], False
+
+    # Single-select
     match = OPTIONS_PATTERN.search(raw)
     if not match:
-        return raw.strip(), []
+        return raw.strip(), [], False
 
     options_raw = match.group(1).strip()
     message_text = OPTIONS_PATTERN.sub("", raw).strip()
@@ -79,11 +104,11 @@ def parse_agent_response(raw: str) -> tuple[str, list[str]]:
     try:
         options = json.loads(options_raw)
         if isinstance(options, list) and all(isinstance(o, str) for o in options):
-            return message_text, options[:3]  # cap at 3
+            return message_text, options[:3], False  # cap at 3
     except (json.JSONDecodeError, TypeError):
         pass
 
-    return raw.strip(), []
+    return raw.strip(), [], False
 
 
 # ---------------------------------------------------------------------------
@@ -151,15 +176,75 @@ _Q_STYLE = QStyle([
 ])
 
 CUSTOM_LABEL = "✏  Custom answer..."
+BACK_LABEL = "↩  Go back to previous question"
 
 
-def get_user_choice(options: list[str]) -> str:
-    """Arrow-key selection menu (Claude Code style).
+def get_user_choice(options: list[str], multi: bool = False) -> str:
+    """Arrow-key selection menu.
 
-    Shows the LLM-suggested options + a 'Custom answer' entry.
-    Returns the chosen option text or the user's custom string.
+    Args:
+        options: List of option strings to display.
+        multi: If True, use checkbox (space to toggle, enter to confirm).
+               User can select multiple items. If False, single-select.
+
+    Returns:
+        Chosen option(s) as a string. Multiple selections joined with ' + '.
+        Returns BACK_COMMAND if user selects "Go back".
     """
-    choices = list(options) + [CUSTOM_LABEL]
+    if multi:
+        # Multi-select: checkbox style — retry once on empty selection
+        choices = list(options) + [CUSTOM_LABEL, BACK_LABEL]
+        for attempt in range(2):
+            selected = questionary.checkbox(
+                "Select all that apply:",
+                choices=choices,
+                style=_Q_STYLE,
+                instruction="(↑↓ move, Space to toggle, Enter to confirm)",
+            ).ask()
+
+            if selected is None:
+                # Ctrl-C
+                return ""
+
+            # /back takes priority over everything
+            if BACK_LABEL in selected:
+                return BACK_COMMAND
+
+            # Handle custom answer in multi-select
+            has_custom = CUSTOM_LABEL in selected
+            picked = [s for s in selected if s != CUSTOM_LABEL]
+
+            if has_custom:
+                custom = questionary.text(
+                    "Type additional answer:",
+                    style=_Q_STYLE,
+                ).ask()
+                if custom and custom.strip():
+                    picked.append(custom.strip())
+
+            if picked:
+                result = " + ".join(picked)
+                console.print(f"  [dim]→ {result}[/dim]")
+                return result
+
+            # Empty selection — hint and retry (or fall through to text input)
+            if attempt == 0:
+                console.print(
+                    "  [warning]No items selected.[/warning] "
+                    "[dim]Use Space to toggle items, then Enter to confirm. "
+                    "Trying again...[/dim]"
+                )
+
+        # Two empty attempts — fall back to free-text input
+        console.print("  [dim]Switching to text input...[/dim]")
+        custom = questionary.text(
+            "Type your answer:",
+            style=_Q_STYLE,
+        ).ask()
+        return custom.strip() if custom else ""
+
+    # Single-select: original behavior
+    choices = list(options) + [CUSTOM_LABEL, BACK_LABEL]
 
     selected = questionary.select(
         "Pick an option:",
@@ -169,8 +254,10 @@ def get_user_choice(options: list[str]) -> str:
     ).ask()
 
     if selected is None:
-        # User pressed Ctrl-C
         return ""
+
+    if selected == BACK_LABEL:
+        return BACK_COMMAND
 
     if selected == CUSTOM_LABEL:
         custom = questionary.text(
@@ -184,12 +271,44 @@ def get_user_choice(options: list[str]) -> str:
 
 
 def get_user_input() -> str:
-    """Simple free-text input (no options)."""
+    """Simple free-text input (no options). Supports /back command."""
     try:
-        raw = Prompt.ask("[user]You[/user]").strip()
+        raw = Prompt.ask("[user]You[/user]  [dim](/back to revise previous answer)[/dim]").strip()
         return raw
     except (KeyboardInterrupt, EOFError):
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Turn saved / go-back notifications
+# ---------------------------------------------------------------------------
+
+def render_turn_saved(turn_num: int) -> None:
+    """Subtle notification that the turn was saved to context."""
+    console.print(
+        f"  [dim]\u2714 Turn {turn_num} saved to context[/dim]"
+    )
+
+
+def render_go_back(previous_question: str) -> None:
+    """Show the previous agent question when user goes back."""
+    console.print(Panel(
+        f"[dim]Going back to previous question:[/dim]\n\n{previous_question}",
+        title="[warning]\u21a9 Revising Previous Answer[/warning]",
+        title_align="left",
+        border_style="yellow",
+        padding=(1, 2),
+    ))
+
+
+def render_go_back_unavailable() -> None:
+    """Shown when user tries /back but there's nothing to go back to."""
+    console.print("  [dim]Nothing to go back to — this is the first question.[/dim]")
+
+
+def strip_code_blocks(text: str) -> str:
+    """Remove all fenced code blocks from text (planning mode — no code)."""
+    return CODE_BLOCK_PATTERN.sub("", text).strip()
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,662 @@
+================================================================
+CORE HLD CONCEPTS (BUILDING BLOCKS) — FULL KNOWLEDGE SOURCE MATERIAL
+================================================================
+Category: Core HLD Concepts
+Sub-categories: Load Balancing, Caching, Message Queues, DB Sharding
+Purpose: Source material for RAG vector DB — Plan & Architect Agent
+================================================================
+
+
+----------------------------------------------------------------
+SECTION 1: WHAT ARE HLD BUILDING BLOCKS
+----------------------------------------------------------------
+
+HLD building blocks are the fundamental infrastructure components that are added to a system design to solve specific scalability, performance, reliability, and decoupling problems. They are the toolkit of a system architect.
+
+Every non-trivial system will use some combination of these building blocks. The agent must know WHEN to add each building block based on project signals — not ask the developer which ones to use.
+
+Four core HLD building blocks:
+1. Load Balancing — distribute traffic across multiple servers
+2. Caching — reduce latency and DB load by storing frequently accessed data
+3. Message Queues — decouple services and enable async processing
+4. DB Sharding — scale databases horizontally across multiple machines
+
+Additional building blocks always considered in HLD:
+5. API Gateway — single entry point for all client requests
+6. CDN (Content Delivery Network) — serve static assets from edge locations
+7. Rate Limiting — protect services from abuse and overload
+8. Service Discovery — allow services to find each other dynamically
+9. Circuit Breaker — prevent cascade failures in distributed systems
+10. Replication — maintain copies of data for availability and read scaling
+
+MASTER RULE:
+Every building block solves a specific problem. The agent must identify the problem first, then recommend the building block — not the other way around.
+
+Problem → Building Block mapping:
+- "Too much traffic for one server" → Load Balancer
+- "DB queries are slow / repeated" → Cache (Redis)
+- "Services are tightly coupled" → Message Queue
+- "DB is too large for one machine" → DB Sharding
+- "Static files load slowly globally" → CDN
+- "All requests go to different services" → API Gateway
+- "Service gets hammered by too many requests" → Rate Limiting
+- "One service failure brings down others" → Circuit Breaker
+- "Need high availability for DB reads" → DB Replication
+
+
+----------------------------------------------------------------
+SECTION 2: LOAD BALANCING
+----------------------------------------------------------------
+
+DEFINITION:
+A load balancer is a component that distributes incoming network traffic across multiple servers (instances) to ensure no single server is overwhelmed. It improves availability, scalability, and fault tolerance.
+
+Core principle: Distribute traffic → prevent single server overload → improve reliability.
+
+STRUCTURE:
+[Clients] → [Load Balancer] → [Server 1]
+                           → [Server 2]
+                           → [Server 3]
+
+If Server 1 goes down, load balancer automatically routes traffic to Server 2 and 3.
+
+TYPES OF LOAD BALANCERS:
+
+1. Layer 4 Load Balancer (Transport Layer):
+   - Routes based on IP address and TCP/UDP port
+   - Does not inspect packet content
+   - Faster, lower overhead
+   - Used for: high-throughput, low-latency raw traffic distribution
+   - Example: AWS NLB (Network Load Balancer)
+
+2. Layer 7 Load Balancer (Application Layer):
+   - Routes based on HTTP content (URL path, headers, cookies)
+   - Can route /api requests to API servers and /static to CDN
+   - More intelligent routing, slightly more overhead
+   - Used for: HTTP traffic, microservices routing
+   - Example: AWS ALB (Application Load Balancer), Nginx, HAProxy
+
+LOAD BALANCING ALGORITHMS:
+
+1. Round Robin — requests distributed to servers in rotation (1→2→3→1→2→3)
+   Use when: all servers have equal capacity
+
+2. Weighted Round Robin — servers with more capacity get more requests
+   Use when: servers have different hardware specs
+
+3. Least Connections — new request goes to server with fewest active connections
+   Use when: requests have variable processing time
+
+4. IP Hash — same client IP always goes to same server (session stickiness)
+   Use when: stateful applications where session must persist on one server
+
+5. Random — requests randomly distributed
+   Use when: simple, low-traffic systems
+
+6. Least Response Time — requests go to server with lowest latency
+   Use when: latency-sensitive applications
+
+HEALTH CHECKS:
+Load balancers continuously ping servers. If a server fails health check, it is removed from the pool automatically. This is the primary mechanism for high availability.
+
+WHEN TO ADD A LOAD BALANCER:
+- System must handle more than what one server can process
+- High availability is required (99.9%+ uptime)
+- Horizontal scaling is planned (adding more servers)
+- Zero-downtime deployments needed (route traffic away from server being deployed)
+- Any production system exposed to the internet
+
+WHEN LOAD BALANCER IS NOT NEEDED:
+- Development / local environment
+- Single-server internal tool
+- Prototype with very low traffic
+
+LOAD BALANCER IN MICROSERVICES:
+- External Load Balancer: routes client traffic to API Gateway or service instances
+- Internal Load Balancer / Service Mesh: routes traffic between microservices internally
+- Examples: Nginx, HAProxy, AWS ALB, Kubernetes Ingress, Istio (service mesh)
+
+STICKY SESSIONS vs STATELESS:
+- Stateless servers (recommended) → any server can handle any request → true load balancing
+- Stateful servers → session tied to one server → use IP Hash or external session store (Redis)
+- Best practice: make servers stateless, store session in Redis — then any load balancing algorithm works
+
+DECISION RULE — WHEN TO INCLUDE IN HLD:
+- Any system with 10,000+ users → Load Balancer mandatory
+- Any system requiring high availability → Load Balancer mandatory
+- Microservices → Load Balancer at API Gateway level mandatory
+- "food delivery", "e-commerce", "social platform" → Load Balancer mandatory
+- "internal HR tool with 50 users" → Load Balancer optional
+
+
+----------------------------------------------------------------
+SECTION 3: CACHING
+----------------------------------------------------------------
+
+DEFINITION:
+Caching is the process of storing copies of frequently accessed data in a fast-access storage layer (cache) so that future requests for that data are served faster, without hitting the slower primary data source (database or external API).
+
+Core principle: Store results of expensive operations → serve them faster on repeated requests → reduce DB load.
+
+The cache sits between the application and the database. When data is requested:
+1. Check cache first (cache hit) → return immediately
+2. If not in cache (cache miss) → fetch from DB → store in cache → return
+
+CACHE HIT RATE: percentage of requests served from cache. Higher is better. Target 80-95% for effective caching.
+
+CACHING LAYERS IN A SYSTEM:
+
+1. Client-Side Cache (Browser Cache)
+   - Stored in the user's browser
+   - HTTP headers control caching (Cache-Control, ETag, Expires)
+   - Used for: static assets (JS, CSS, images), API responses that rarely change
+   - TTL: hours to days
+
+2. CDN Cache (Edge Cache)
+   - Stored at CDN edge servers close to users geographically
+   - Used for: static files, images, videos
+   - Reduces latency globally, reduces origin server load
+   - Examples: Cloudflare, AWS CloudFront, Fastly
+
+3. Application-Level Cache (In-Process Cache)
+   - Stored in application memory (in-process)
+   - Fastest possible access (nanoseconds)
+   - Lost when application restarts
+   - Used for: small lookup tables, configuration data
+   - Examples: Python dict, LRU cache decorator
+
+4. Distributed Cache (External Cache)
+   - Stored in a dedicated cache server, shared across all application instances
+   - Persists across application restarts (if configured)
+   - Used for: session data, user data, API responses, computed results
+   - Examples: Redis, Memcached
+   - Redis is the industry standard — supports strings, lists, sets, sorted sets, hashes, pub/sub
+
+REDIS — THE STANDARD CACHING SOLUTION:
+Redis is an in-memory data structure store used as a cache, message broker, and session store.
+- Speed: sub-millisecond response times
+- Data structures: String, Hash, List, Set, Sorted Set, Bitmap, HyperLogLog
+- Persistence: can persist to disk (RDB snapshots, AOF logs)
+- TTL: set expiry time on any key
+- Pub/Sub: can be used as lightweight message broker
+- Atomic operations: INCR, DECR, SETNX — used for rate limiting, distributed locks
+
+CACHING STRATEGIES:
+
+1. Cache-Aside (Lazy Loading) — most common
+   - Application checks cache first
+   - On miss: fetch from DB, store in cache, return
+   - Pros: only requested data is cached, resilient to cache failure
+   - Cons: first request always slower (cache miss), data can be stale
+   - Use when: read-heavy workload, data not always needed
+
+2. Write-Through
+   - Write to cache and DB simultaneously on every write
+   - Cache is always up-to-date
+   - Pros: no stale data
+   - Cons: write latency increases, caches data that may never be read
+   - Use when: data consistency is critical, read after write is common
+
+3. Write-Behind (Write-Back)
+   - Write to cache immediately, write to DB asynchronously later
+   - Pros: very fast writes
+   - Cons: risk of data loss if cache fails before DB write
+   - Use when: high write throughput, some data loss is acceptable
+
+4. Read-Through
+   - Cache sits in front of DB, handles miss automatically
+   - Application only talks to cache
+   - Pros: simpler application logic
+   - Cons: first request always misses
+   - Use when: cache layer manages its own population logic
+
+5. Refresh-Ahead
+   - Cache proactively refreshes data before it expires
+   - Pros: no cache miss latency for popular data
+   - Cons: may cache data that is no longer needed
+   - Use when: predictable access patterns, low tolerance for cache miss latency
+
+CACHE INVALIDATION — THE HARDEST PROBLEM:
+"There are only two hard things in Computer Science: cache invalidation and naming things."
+
+Invalidation strategies:
+- TTL (Time-To-Live): set expiry time, cache auto-expires. Simple but may serve stale data until TTL expires.
+- Event-Based Invalidation: when data changes in DB, explicitly delete or update cache entry. More complex but always consistent.
+- Cache Versioning: change cache key when data changes (e.g., user:123:v2). Old key auto-expires.
+
+CACHE KEY DESIGN:
+- Format: entity:id:field (e.g., user:123:profile, order:456:status)
+- Include version if needed: user:123:v2
+- For list results: users:page:1:limit:20
+- For AI: prompt_hash:{hash_of_prompt} — semantic caching
+
+WHAT TO CACHE:
+- Database query results that are read frequently and change rarely
+- Computed/aggregated results (totals, statistics, leaderboards)
+- Session data and authentication tokens
+- External API responses (weather, exchange rates)
+- Static configuration data
+- AI model responses for identical prompts (semantic caching)
+
+WHAT NOT TO CACHE:
+- Highly personalized data that is unique per request
+- Rapidly changing data where staleness is unacceptable
+- Sensitive financial data that must always be real-time
+- Data that is rarely read (no benefit from caching)
+
+WHEN TO ADD CACHING TO HLD:
+- DB query response time > 100ms → caching needed
+- Same data read repeatedly by many users → caching needed
+- External API with rate limits or slow response → cache its responses
+- Session management in a multi-instance application → Redis session store
+- Any system with 10,000+ users → caching is mandatory
+
+CACHING IN AI SYSTEMS:
+- Cache LLM responses for identical prompts (semantic caching with Redis)
+- Cache embedding vectors for documents that don't change
+- Cache retrieval results for repeated queries
+- Cache user session and conversation history in Redis
+- Use Langfuse to track cache hit rates for AI observability
+
+DECISION RULE — INFER FROM PROJECT:
+- "user profile" → cache in Redis with TTL 15 minutes
+- "product catalogue" → cache in Redis with TTL 1 hour (changes rarely)
+- "live stock price" → DO NOT cache (must be real-time)
+- "session management" → Redis session store always
+- "AI chatbot" → cache conversation history in Redis
+- "leaderboard" → Redis Sorted Set (perfect data structure for rankings)
+- "rate limiting" → Redis INCR with TTL (atomic counter per user)
+
+
+----------------------------------------------------------------
+SECTION 4: MESSAGE QUEUES
+----------------------------------------------------------------
+
+DEFINITION:
+A message queue is a component that enables asynchronous communication between services by storing messages in a queue until the receiving service is ready to process them. The producer sends a message to the queue and continues without waiting for the consumer to process it.
+
+Core principle: Decouple producer and consumer → enable async processing → improve resilience and scalability.
+
+STRUCTURE:
+[Producer Service] → [Message Queue] → [Consumer Service]
+                    (stores messages)   (processes when ready)
+
+Producer and consumer never communicate directly. The queue acts as a buffer.
+
+KEY CONCEPTS:
+
+Producer: Service that creates and sends messages to the queue
+Consumer: Service that reads and processes messages from the queue
+Message: The data payload sent (usually JSON)
+Queue: The buffer that stores messages until consumed
+Topic: A named channel (in Kafka) — producers publish to topics, consumers subscribe
+Acknowledgement (ACK): Consumer confirms message was processed successfully
+Dead Letter Queue (DLQ): Where failed messages go after max retry attempts
+Consumer Group: Multiple consumers sharing the work of processing a queue (parallelism)
+
+TWO MAIN MESSAGE QUEUE TOOLS:
+
+1. KAFKA (Apache Kafka):
+   - Distributed event streaming platform
+   - Stores events as an immutable log — consumers can replay events
+   - Extremely high throughput (millions of messages per second)
+   - Events are retained for a configurable period (days/weeks)
+   - Multiple consumer groups can read the same topic independently
+   - Best for: event streaming, audit logs, real-time analytics, high-volume event pipelines
+   - Concepts: Topics, Partitions, Offsets, Consumer Groups, Brokers, Zookeeper/KRaft
+   - Use when: high throughput, event replay needed, multiple consumers of same event
+
+2. RABBITMQ:
+   - Traditional message broker
+   - Supports multiple messaging patterns: point-to-point, pub/sub, routing, topics
+   - Messages are consumed and deleted (not retained like Kafka)
+   - Better for task queues where each message is processed by exactly one worker
+   - Supports complex routing with exchanges and binding keys
+   - Best for: task queues, job distribution, RPC over messaging
+   - Use when: task distribution, routing complexity, lower throughput needs
+
+KAFKA vs RABBITMQ DECISION:
+Use Kafka when:
+- High throughput (100k+ messages/second)
+- Need event replay / audit trail
+- Multiple independent consumers of same event
+- Event sourcing, stream processing
+
+Use RabbitMQ when:
+- Task queue (one consumer per message)
+- Complex routing rules
+- Lower throughput
+- Need message priority queues
+
+CELERY + REDIS (relevant to your stack):
+- Celery is a distributed task queue for Python
+- Redis acts as the message broker for Celery
+- Worker processes pick up tasks from Redis queue and execute them
+- Best for: Django/FastAPI async task offloading
+- Use when: background jobs, periodic tasks, CPU-heavy processing in Python
+- Redis as broker: simple, fast, sufficient for most Python async needs
+- Upgrade to Kafka/RabbitMQ: when throughput exceeds Redis capacity or event replay is needed
+
+MESSAGING PATTERNS:
+
+1. Point-to-Point (Queue):
+   - One producer → one consumer per message
+   - Message deleted after consumption
+   - Use for: task distribution, job queues
+   - Example: Order placed → payment processing task queue
+
+2. Publish-Subscribe (Pub/Sub):
+   - One producer → multiple consumers, all receive the same message
+   - Use for: broadcasting events to multiple interested services
+   - Example: "OrderPlaced" → NotificationService + InventoryService + AnalyticsService all consume
+
+3. Request-Reply:
+   - Producer sends message and waits for reply on a reply queue
+   - Async version of synchronous RPC
+   - Use for: inter-service communication where response is needed but latency flexibility exists
+
+4. Dead Letter Queue (DLQ):
+   - Messages that fail processing after N retries go to DLQ
+   - Allows investigation without blocking the main queue
+   - Every production queue should have a DLQ configured
+
+5. Priority Queue:
+   - Messages assigned priority levels, higher priority processed first
+   - Use for: urgent task processing (premium user requests before free tier)
+
+MESSAGE QUEUE BENEFITS IN DETAIL:
+
+1. Decoupling: Producer doesn't need to know about consumers. Add new consumers without changing producer.
+
+2. Load Leveling: Queue absorbs traffic spikes. Producer can burst, consumer processes at steady rate.
+   Example: Black Friday order spike → orders go to queue → payment service processes at its own pace
+
+3. Resilience: If consumer goes down, messages wait in queue. No data loss.
+
+4. Scalability: Add more consumers to process queue faster during high load.
+
+5. Retry Logic: Failed messages automatically retried before going to DLQ.
+
+WHEN TO ADD MESSAGE QUEUE TO HLD:
+- Any operation that can be processed asynchronously (user doesn't need immediate result)
+- Sending emails, SMS, push notifications → always async via queue
+- Order processing post-placement actions → queue
+- File/image processing → queue
+- Report generation → queue
+- Inter-service communication that doesn't need immediate response → queue
+- Handling traffic spikes → queue as buffer
+- Any AI/LLM processing that takes > 2 seconds → queue (return job_id, poll for result)
+
+WHEN NOT TO USE MESSAGE QUEUE:
+- User is waiting synchronously for the result (payment confirmation in real-time)
+- Simple direct service call is sufficient
+- Very low volume system where async adds unnecessary complexity
+
+MESSAGE QUEUES IN AI SYSTEMS:
+- Document uploaded → queue → async ingestion worker (chunk, embed, store in Qdrant)
+- User submits long-running AI task → queue → worker runs LLM chain → result stored → user notified
+- Celery + Redis for FastAPI/Django background AI tasks
+- Kafka for high-volume AI event streaming (user behavior events for recommendation engine)
+- DLQ for failed LLM API calls — retry with backoff
+
+DECISION RULE — INFER FROM PROJECT:
+- "send email on registration" → Celery + Redis queue, async task
+- "process uploaded document with AI" → queue mandatory (async processing)
+- "order placed → notify restaurant, driver, user" → Kafka pub/sub (one event, 3 consumers)
+- "generate AI report" → queue (long-running, return job_id)
+- "real-time bidding" → Kafka (high throughput, low latency)
+- "background data sync" → Celery + Redis or RabbitMQ
+- "payment webhook processing" → RabbitMQ or Celery task queue
+
+
+----------------------------------------------------------------
+SECTION 5: DATABASE SHARDING
+----------------------------------------------------------------
+
+DEFINITION:
+Database sharding is the process of partitioning a large database horizontally into smaller, faster, more manageable pieces called shards. Each shard is a separate database instance that holds a subset of the total data. Together, all shards hold the complete dataset.
+
+Core principle: Split data across multiple DB instances → each instance handles a fraction of the load → system scales horizontally.
+
+STRUCTURE:
+[Application]
+     ↓
+[Shard Router / Proxy]
+     ↓            ↓            ↓
+[Shard 1]    [Shard 2]    [Shard 3]
+Users A-M    Users N-T    Users U-Z
+
+Each shard is an independent PostgreSQL (or MySQL, MongoDB) instance.
+
+KEY CONCEPTS:
+
+Shard Key: The field used to determine which shard a record belongs to.
+Choosing the right shard key is the most critical sharding decision.
+Good shard key: evenly distributes data and queries across shards, avoids hotspots.
+
+Shard Router: The component that determines which shard a query goes to based on the shard key.
+
+Hotspot: When one shard receives disproportionately more traffic than others. Bad shard key causes hotspots.
+
+Rebalancing: When shards become uneven, data must be moved between shards. Operationally complex.
+
+SHARDING STRATEGIES:
+
+1. Range-Based Sharding:
+   - Data divided by value ranges of the shard key
+   - Example: User ID 1-1M → Shard 1, 1M-2M → Shard 2, 2M-3M → Shard 3
+   - Pros: Simple, range queries efficient
+   - Cons: Uneven distribution if data is not uniformly distributed (hotspot risk)
+   - Use when: time-series data (date as shard key), ordered data
+
+2. Hash-Based Sharding:
+   - Shard key is hashed, hash determines the shard
+   - Example: shard = hash(user_id) % number_of_shards
+   - Pros: Even distribution, no hotspots
+   - Cons: Range queries inefficient (data scattered), adding shards requires rehashing
+   - Use when: uniform random access, no range query requirements
+
+3. Directory-Based Sharding:
+   - A lookup table (directory) maps each shard key to its shard
+   - Pros: Flexible, easy to rebalance by updating directory
+   - Cons: Directory becomes a bottleneck and single point of failure
+   - Use when: complex sharding logic, need flexible reassignment
+
+4. Geographic Sharding:
+   - Data partitioned by geography (region/country)
+   - Example: US users → US shard, EU users → EU shard, APAC → APAC shard
+   - Pros: Data locality (low latency), compliance (GDPR data residency)
+   - Cons: Uneven if regions have different user volumes
+   - Use when: global systems with data residency requirements
+
+CHOOSING THE RIGHT SHARD KEY:
+Good shard key criteria:
+- High cardinality → many possible values (not boolean)
+- Even distribution → data spreads evenly across shards
+- Query alignment → most queries filter by this key (avoids cross-shard queries)
+- Immutable → shard key should not change (changing it requires moving data)
+
+Common shard keys:
+- User ID → for user-centric data
+- Geographic region → for global systems
+- Tenant ID → for multi-tenant SaaS
+- Date/time → for time-series data
+- Order ID → for order data
+
+CROSS-SHARD QUERIES (the main problem):
+- Queries that span multiple shards are expensive
+- Must query all shards and merge results at application level
+- Solution: design schema and shard key so most queries hit one shard
+- Avoid JOINs across shards — keep related data on the same shard
+
+SHARDING vs OTHER SCALING APPROACHES:
+
+Approach            | What it solves              | When to use
+--------------------|-----------------------------|-----------------------------------------
+Vertical Scaling    | Single DB too slow          | First step — upgrade hardware
+Read Replicas       | Too many read queries       | Read-heavy workload, before sharding
+Caching (Redis)     | Repeated read queries       | Most systems, before DB scaling
+Connection Pooling  | Too many DB connections     | High concurrency (PgBouncer)
+Partitioning        | Large table in single DB    | When table has billions of rows
+Sharding            | Single DB can't handle load | Last resort for extreme scale
+
+RULE: Sharding is the last resort. Before sharding:
+1. Add caching (Redis) — eliminates most read load
+2. Add read replicas — distribute read queries
+3. Optimize queries — indexes, query rewriting
+4. Vertical scale — upgrade DB hardware
+5. Table partitioning — within single DB instance
+6. Then shard — only when all above are insufficient
+
+WHEN TO ADD SHARDING TO HLD:
+- Database is projected to exceed 1-2 TB of data
+- Write throughput exceeds what one DB instance can handle (typically > 10,000 writes/second)
+- Single DB instance cannot be vertically scaled further
+- System serves 10M+ users
+- Time-series data growing indefinitely (IoT, analytics, logs)
+
+WHEN NOT TO SHARD:
+- System has fewer than 1 million users
+- DB size is under 500 GB
+- Read replicas + caching have not been tried yet
+- Team lacks expertise to manage distributed DB
+- MVP or early-stage product — premature optimization
+
+SHARDING IN NOSQL vs SQL:
+- MongoDB: built-in sharding support, easier to shard than SQL
+- Cassandra: sharding is native (called partitioning), uses consistent hashing
+- PostgreSQL: manual sharding (Citus extension for automatic sharding)
+- MySQL: manual sharding at application level
+
+DECISION RULE — INFER FROM PROJECT:
+- "social media platform with 100M users" → sharding needed for user data
+- "IoT sensor data" → time-based sharding mandatory
+- "global e-commerce with 50M orders/day" → order data sharding needed
+- "startup with 10,000 users" → DO NOT shard, use caching + read replicas
+- "food delivery app MVP" → DO NOT shard, premature
+
+
+----------------------------------------------------------------
+SECTION 6: ADDITIONAL HLD BUILDING BLOCKS
+----------------------------------------------------------------
+
+API GATEWAY:
+Definition: Single entry point for all client requests. Routes requests to appropriate services, handles cross-cutting concerns.
+Responsibilities: Authentication, rate limiting, SSL termination, request routing, response transformation, logging.
+Tools: AWS API Gateway, Kong, Nginx, Traefik, FastAPI (as lightweight gateway)
+When to add: Any microservices system, any public API, any system where auth must be centralized.
+Decision rule: "microservices" → API Gateway mandatory. "monolith" → optional.
+
+CDN (Content Delivery Network):
+Definition: Network of geographically distributed servers that cache and serve static content from locations close to users.
+Used for: Static files (JS, CSS, images, videos), API responses that don't change per user.
+Tools: Cloudflare, AWS CloudFront, Fastly, Akamai.
+Benefits: Reduced latency globally, reduced origin server load, DDoS protection.
+When to add: Any system with global users, any media-heavy application, any system serving static assets.
+Decision rule: "global users" or "images/videos/static files" → CDN mandatory.
+
+RATE LIMITING:
+Definition: Controlling the number of requests a client can make in a given time period.
+Algorithms: Token Bucket, Leaky Bucket, Fixed Window Counter, Sliding Window Log.
+Implementation: Redis-based counters (INCR with TTL), API Gateway rate limiting.
+When to add: Any public API, any AI API to control LLM costs, any system vulnerable to abuse.
+Decision rule: "public API" or "LLM-powered app" → Rate limiting mandatory.
+
+SERVICE DISCOVERY:
+Definition: Mechanism by which services in a microservices system find each other's network location dynamically.
+Tools: Consul, Kubernetes DNS, Eureka, AWS Cloud Map.
+When to add: Any microservices system where services scale dynamically.
+Decision rule: "microservices on Kubernetes" → Service discovery handled by Kubernetes DNS automatically.
+
+CIRCUIT BREAKER:
+Definition: Automatically stops calling a failing service and returns a fallback response, preventing cascade failures.
+States: Closed (normal), Open (failing, stop calls), Half-Open (testing recovery).
+Tools: Resilience4j (Java), Hystrix, Polly (.NET), custom implementation in Python.
+When to add: Any microservices system, any system with external API calls that can fail.
+Decision rule: "microservices" or "external API dependency" → Circuit Breaker recommended.
+
+DATABASE REPLICATION:
+Definition: Maintaining copies of the database across multiple instances.
+Types:
+- Primary-Replica (Master-Slave): One primary handles writes, replicas handle reads.
+- Multi-Primary: Multiple primaries handle writes (complex, conflict resolution needed).
+Benefits: Read scalability, high availability, failover.
+When to add: Any system with read-heavy workload, any system requiring high availability.
+Decision rule: Before sharding, always try read replicas first. "high availability" → replication mandatory.
+
+CONNECTION POOLING:
+Definition: Maintaining a pool of reusable database connections to avoid the overhead of creating new connections.
+Tools: PgBouncer (PostgreSQL), SQLAlchemy connection pool, asyncpg pool.
+When to add: Any production PostgreSQL system with high concurrency.
+Decision rule: "FastAPI + PostgreSQL" → PgBouncer or SQLAlchemy pool always.
+
+
+----------------------------------------------------------------
+SECTION 7: HLD BUILDING BLOCKS BY PROJECT TYPE
+----------------------------------------------------------------
+
+FOOD DELIVERY APP:
+- Load Balancer → distribute traffic across API servers
+- Redis Cache → restaurant menus, user sessions, driver locations
+- Kafka → order events (placed → restaurant → driver → delivered)
+- Read Replicas → order history reads
+- CDN → restaurant photos, app static assets
+- API Gateway → auth, routing, rate limiting
+- Sharding → NOT needed at MVP scale
+
+E-COMMERCE PLATFORM:
+- Load Balancer → mandatory
+- Redis Cache → product catalog, cart, sessions
+- Kafka → order processing events
+- CDN → product images, static assets
+- Read Replicas → product search reads
+- Sharding → only at 10M+ users
+- Rate Limiting → prevent checkout abuse
+
+AI-POWERED CHATBOT (RAG):
+- Load Balancer → API server instances
+- Redis Cache → conversation history, semantic cache for LLM responses
+- Celery + Redis Queue → async document ingestion, long LLM tasks
+- CDN → frontend static assets
+- Rate Limiting → control LLM API costs per user
+- Read Replicas → vector DB read scaling (if supported)
+- API Gateway → auth, token counting, rate limiting
+
+SOCIAL MEDIA PLATFORM:
+- Load Balancer → mandatory
+- Redis Cache → feed cache, user sessions, like counts (Redis counters)
+- Kafka → post events, notification fan-out
+- CDN → images, videos
+- Read Replicas → feed reads
+- Sharding → user data at 50M+ users
+
+
+----------------------------------------------------------------
+SECTION 8: QUESTIONS THE AGENT MUST ASK vs INFER
+----------------------------------------------------------------
+
+INFER FROM PROJECT (do not ask):
+- "10,000+ users" → Load Balancer mandatory
+- "session management" → Redis mandatory
+- "notifications / email / SMS" → Message Queue mandatory
+- "images / videos / static assets" → CDN mandatory
+- "public API" → Rate Limiting mandatory
+- "microservices" → API Gateway + Service Discovery mandatory
+- "async heavy tasks (AI processing, reports)" → Celery + Redis Queue
+- "100M+ users" → DB Sharding consideration
+- "read-heavy system" → Read Replicas before Sharding
+
+ALWAYS ASK:
+1. Expected scale (users/requests) → determines which building blocks to include
+2. Global or regional users → determines CDN need
+3. Any real-time features → determines WebSocket + Redis Pub/Sub need
+
+NEVER ASK:
+- Whether to add caching → infer from data access patterns
+- Which message queue to use → infer from throughput and pattern (Celery for Python, Kafka for high throughput)
+- Whether to add CDN → infer from presence of static assets or global users
+
+
+----------------------------------------------------------------
+END OF CORE HLD CONCEPTS SOURCE MATERIAL
+================================================================
